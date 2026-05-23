@@ -1,0 +1,388 @@
+:root {
+  /* Core Color Tokens - Slate & Indigo Light Theme */
+  --primary-color: #4f46e5;       /* Indigo-600 */
+  --primary-light: #818cf8;       /* Indigo-400 */
+  --primary-dark: #3730a3;        /* Indigo-800 */
+  --primary-light-bg: #eef2ff;    /* Indigo-50 */
+  
+  --accent-color: #10b981;        /* Emerald-500 */
+  --accent-light-bg: #d1fae5;     /* Emerald-100 */
+  --accent-dark: #065f46;         /* Emerald-800 */
+  
+  --slate-50: #f8fafc;
+  --slate-100: #f1f5f9;
+  --slate-200: #e2e8f0;
+  --slate-300: #cbd5e1;
+  --slate-400: #94a3b8;
+  --slate-500: #64748b;
+  --slate-600: #475569;
+  --slate-700: #334155;
+  --slate-800: #1e293b;
+  --slate-900: #0f172a;
+  
+  --card-bg: #ffffff;
+  --border-color: #e2e8f0;
+  --hover-bg: #f8fafc;
+  --shadow-sm: 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.05), 0 2px 4px -1px rgba(0, 0, 0, 0.02);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.05), 0 4px 6px -2px rgba(0, 0, 0, 0.02);
+  --shadow-xl: 0 20px 25px -5px rgba(0, 0, 0, 0.08), 0 10px 10px -5px rgba(0, 0, 0, 0.03);
+}
+
+/* Global Reset & Base Styling */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+  font-family: var(--font-geist-sans), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  background-color: #f8fafc; /* Subtle off-white bg */
+  color: var(--slate-800);
+}
+
+body {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow-x: hidden;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbar Customization */
+::-webkit-scrollbar {
+  width: 10px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--slate-100);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--slate-300);
+  border-radius: 5px;
+  border: 2px solid var(--slate-100);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--slate-400);
+}
+
+/* Sticky Glassmorphic Header */
+.mainHeader {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  background-color: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-bottom: 1px solid var(--border-color);
+  z-index: 100;
+  transition: all 0.3s ease;
+}
+
+.headerContainer {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0.875rem 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.logoGroup {
+  display: flex;
+  align-items: center;
+  gap: 0.625rem;
+  cursor: pointer;
+}
+
+.logoIcon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, var(--primary-color), var(--primary-light));
+  color: #ffffff;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  box-shadow: 0 4px 10px rgba(79, 70, 229, 0.2);
+}
+
+.logoText {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--slate-900);
+  letter-spacing: -0.025em;
+}
+
+.logoAccent {
+  color: var(--primary-color);
+}
+
+.navLinks {
+  display: flex;
+  align-items: center;
+  gap: 2rem;
+}
+
+.navItem {
+  text-decoration: none;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--slate-600);
+  transition: color 0.2s ease;
+}
+
+.navItem:hover {
+  color: var(--primary-color);
+}
+
+.ctaButton {
+  text-decoration: none;
+  padding: 0.625rem 1.25rem;
+  background-color: var(--primary-color);
+  color: #ffffff;
+  font-size: 0.875rem;
+  font-weight: 600;
+  border-radius: 10px;
+  box-shadow: 0 4px 10px rgba(79, 70, 229, 0.12);
+  transition: all 0.2s ease;
+}
+
+.ctaButton:hover {
+  background-color: var(--primary-dark);
+  transform: translateY(-1px);
+  box-shadow: 0 6px 14px rgba(79, 70, 229, 0.2);
+}
+
+/* Content Layout */
+.contentWrapper {
+  margin-top: 65px; /* Offset sticky header */
+  flex-grow: 1;
+}
+
+/* Footer Styling */
+.mainFooter {
+  background-color: var(--slate-50);
+  border-top: 1px solid var(--border-color);
+  padding: 4rem 1.5rem 2rem;
+  margin-top: auto;
+}
+
+.footerContainer {
+  max-width: 1200px;
+  margin: 0 auto;
+  display: grid;
+  grid-template-columns: 2fr 1fr 1fr;
+  gap: 4rem;
+  margin-bottom: 3rem;
+}
+
+@media (max-width: 768px) {
+  .footerContainer {
+    grid-template-columns: 1fr;
+    gap: 2rem;
+  }
+  .navLinks {
+    display: none; /* Hide header links on mobile, keep simple */
+  }
+}
+
+.footerInfo {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.footerDesc {
+  font-size: 0.875rem;
+  color: var(--slate-500);
+  max-width: 380px;
+  line-height: 1.6;
+}
+
+.footerLinks {
+  display: contents;
+}
+
+.linkGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.875rem;
+}
+
+.groupTitle {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--slate-800);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.fLink {
+  text-decoration: none;
+  font-size: 0.875rem;
+  color: var(--slate-500);
+  transition: color 0.15s ease;
+}
+
+.fLink:hover {
+  color: var(--primary-color);
+}
+
+.footerBottom {
+  max-width: 1200px;
+  margin: 0 auto;
+  border-top: 1px solid var(--border-color);
+  padding-top: 1.5rem;
+  text-align: center;
+  font-size: 0.825rem;
+  color: var(--slate-400);
+}
+
+/* Beautiful Custom Input Controls (Standard across app) */
+.customInputGroup {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  width: 100%;
+}
+
+.customInputLabel {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: var(--slate-700);
+}
+
+.customTextInput {
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background-color: var(--card-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 12px;
+  font-size: 0.95rem;
+  color: var(--slate-800);
+  outline: none;
+  transition: all 0.2s ease;
+  box-shadow: var(--shadow-sm);
+}
+
+.customTextInput:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(79, 70, 229, 0.12);
+}
+
+.customTextInput::placeholder {
+  color: var(--slate-400);
+}
+
+/* Toggle Buttons for BHK/Bathrooms selection */
+.toggleGrid {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 0.5rem;
+}
+
+.toggleBtn {
+  padding: 0.625rem;
+  border: 1px solid var(--border-color);
+  background-color: var(--card-bg);
+  color: var(--slate-600);
+  font-size: 0.9rem;
+  font-weight: 600;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all 0.15s cubic-bezier(0.4, 0, 0.2, 1);
+  user-select: none;
+}
+
+.toggleBtn:hover {
+  border-color: var(--primary-light);
+  background-color: var(--hover-bg);
+}
+
+.toggleBtnActive {
+  background-color: var(--primary-color) !important;
+  border-color: var(--primary-color) !important;
+  color: #ffffff !important;
+  box-shadow: 0 4px 10px rgba(79, 70, 229, 0.15);
+}
+
+/* Elegant Range Slider in Light Theme */
+.sliderWrapper {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.sliderHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sliderValueText {
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--primary-color);
+  background-color: var(--primary-light-bg);
+  padding: 0.25rem 0.625rem;
+  border-radius: 6px;
+}
+
+.sliderControl {
+  -webkit-appearance: none;
+  width: 100%;
+  height: 6px;
+  background: var(--slate-200);
+  border-radius: 3px;
+  outline: none;
+  cursor: pointer;
+}
+
+.sliderControl::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  transition: transform 0.1s ease;
+}
+
+.sliderControl::-webkit-slider-thumb:hover {
+  transform: scale(1.15);
+}
+
+.sliderControl::-moz-range-thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--primary-color);
+  border: 2px solid #ffffff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
+  transition: transform 0.1s ease;
+}
+
+.sliderControl::-moz-range-thumb:hover {
+  transform: scale(1.15);
+}
+
+/* Animations Definitions */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
