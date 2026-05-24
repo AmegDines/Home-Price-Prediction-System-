@@ -40,7 +40,7 @@ export default function RootLayout({
 
             <nav className="navLinks">
               <a href="#predictor" className="navItem">Estimate Value</a>
-              <a href="#list-home" className="navItem">Sell Your Home</a>
+              <a href="#sell-home" className="navItem">Sell Your Home</a>
               <a href="#listings" className="navItem">Browse Properties</a>
             </nav>
             
