@@ -1,0 +1,38 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: home-price-frontend
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: home-price-frontend
+  template:
+    metadata:
+      labels:
+        app: home-price-frontend
+    spec:
+      containers:
+      - name: frontend
+        image: ACCOUNT_ID.dkr.ecr.ap-south-1.amazonaws.com/home-price-frontend:latest
+        ports:
+        - containerPort: 3000
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: home-price-frontend-service
+spec:
+  selector:
+    app: home-price-frontend
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 3000
