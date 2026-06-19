@@ -6,7 +6,7 @@ Built using a **Next.js (React) + FastAPI (Python)** dual-architecture stack, it
 
 ---
 
-## 🚀 Key Features
+##  Key Features
 1. **AI Price Predictor**: Estimates the price of a property in Bengaluru in Lakhs/Crores based on Location, Area (sqft), BHK size, and Bathroom count, trained on 7,400+ verified transaction records.
 2. **Seller Hub ("List Your Home")**: Homeowners can list their properties. As they type, the system provides **real-time AI market valuations** and compares it to their custom asking price to label listings ("Below AI Value", "Fair Market Value", etc.).
 3. **Interactive Listings Board**: Displays listed homes in real-time with comprehensive filters for location, BHK size, and budget ranges, persisted via local storage or backend service.
