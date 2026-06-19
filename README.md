@@ -2,9 +2,6 @@
 
 A premium, high-fidelity real estate web application designed specifically for Bengaluru. The platform features an AI-powered home price valuation engine, a seller portal to list properties with real-time AI valuation guidance, and an interactive properties search board.
 
-Built using a **Next.js (React) + FastAPI (Python)** dual-architecture stack, it is optimized to run fully serverless with client-side predictions (for **$0/month hosting**) or connect to a live Python FastAPI prediction server.
-
----
 
 ##  Key Features
 1. **AI Price Predictor**: Estimates the price of a property in Bengaluru in Lakhs/Crores based on Location, Area (sqft), BHK size, and Bathroom count, trained on 7,400+ verified transaction records.
@@ -12,7 +9,7 @@ Built using a **Next.js (React) + FastAPI (Python)** dual-architecture stack, it
 3. **Interactive Listings Board**: Displays listed homes in real-time with comprehensive filters for location, BHK size, and budget ranges, persisted via local storage or backend service.
 4. **Professional Light Theme Design System**: Built with modern, glassmorphic UI cards, responsive grids, sleek range sliders, and custom location selectors.
 
----
+
 
 ## 🛠️ Tech Stack & Language Selection
 * **Data Science & ML (Python)**: `pandas`, `numpy`, `scikit-learn` used for loading the Kaggle dataset, cleaning nulls/ranges, filtering outliers (bathroom discrepancies, BHK pricing anomalies, sqft per room sizes), and fitting a highly optimized `LinearRegression` model.
