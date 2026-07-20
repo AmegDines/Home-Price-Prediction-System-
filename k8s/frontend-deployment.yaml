@@ -12,9 +12,12 @@ spec:
       labels:
         app: home-price-frontend
     spec:
+      imagePullSecrets:
+       - name: ecr-secret
       containers:
       - name: frontend
-        image: ACCOUNT_ID.dkr.ecr.ap-south-1.amazonaws.com/home-price-frontend:latest
+        image: 111169963700.dkr.ecr.ap-south-1.amazonaws.com/home-price-frontend:latest
+
         ports:
         - containerPort: 3000
         resources:
