@@ -3,6 +3,8 @@ kind: Deployment
 
 metadata:
   name: home-price-backend
+  labels:
+    app: home-price-backend
 
 spec:
   replicas: 1
@@ -28,33 +30,64 @@ spec:
           ports:
             - containerPort: 8000
 
+          # ── Resource requests & limits ────────────────────────────────────
           resources:
             requests:
-              memory: "256Mi"
               cpu: "250m"
-
-            limits:
               memory: "512Mi"
+            limits:
               cpu: "500m"
+              memory: "1Gi"
 
+          # ── Environment ────────────────────────────────────────────────────
+          env:
+            - name: MODEL_DIR
+              value: /app/model
 
+          # ── Model volume mount ─────────────────────────────────────────────
+          volumeMounts:
+            - name: model-storage
+              mountPath: /app/model
+              readOnly: true
+
+          # ── Liveness probe ─────────────────────────────────────────────────
           livenessProbe:
             httpGet:
-              path: /health
+              path: /api/health
               port: 8000
-
             initialDelaySeconds: 30
-            periodSeconds: 10
+            periodSeconds: 15
+            failureThreshold: 3
 
-
+          # ── Readiness probe (gates traffic until model is loaded) ──────────
           readinessProbe:
             httpGet:
-              path: /health
+              path: /api/health
               port: 8000
-
-            initialDelaySeconds: 15
+            initialDelaySeconds: 10
             periodSeconds: 5
+            failureThreshold: 3
 
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: model-pvc
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+
+metadata:
+  name: model-pvc
+  labels:
+    app: home-price-backend
+
+spec:
+  accessModes:
+    - ReadOnlyMany
+  resources:
+    requests:
+      storage: 500Mi
 
 ---
 apiVersion: v1

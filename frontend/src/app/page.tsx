@@ -1,25 +1,44 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from "react";
-import { locations } from "@/data/locations";
 import CustomDropdown from "@/components/CustomDropdown";
 import ListingCard from "@/components/ListingCard";
-import { predictHomePriceClient, PredictionResult } from "@/utils/predictor";
-import { getStoredListings, addStoredListing, HomeListing, analyzeAskingPrice } from "@/utils/listings";
+import {
+  fetchPrediction,
+  fetchLocations,
+  fetchHealth,
+  PredictionResult,
+  ApiError,
+  HealthData,
+} from "@/utils/predictor";
+import {
+  getStoredListings,
+  addStoredListing,
+  HomeListing,
+  analyzeAskingPrice,
+} from "@/utils/listings";
 import styles from "./page.module.css";
 
 export default function Home() {
-  const [activeTab, setActiveTab] = useState<"predictor" | "seller">("predictor");
+  const [activeTab, setActiveTab] = useState<"predictor" | "seller">(
+    "predictor"
+  );
 
-  // ── Buyer Predictor state ──────────────────────────────────────────────────
+  // ── API-fetched data ──────────────────────────────────────────────────────
+  const [apiLocations, setApiLocations] = useState<string[]>([]);
+  const [healthData, setHealthData] = useState<HealthData | null>(null);
+  const [locationsError, setLocationsError] = useState<string | null>(null);
+
+  // ── Buyer Predictor state ─────────────────────────────────────────────────
   const [predictorLoc, setPredictorLoc] = useState("");
   const [predictorSqft, setPredictorSqft] = useState(1200);
   const [predictorBhk, setPredictorBhk] = useState(2);
   const [predictorBath, setPredictorBath] = useState(2);
   const [loading, setLoading] = useState(false);
   const [prediction, setPrediction] = useState<PredictionResult | null>(null);
+  const [predictionError, setPredictionError] = useState<string | null>(null);
 
-  // ── Seller Hub state ───────────────────────────────────────────────────────
+  // ── Seller Hub state ──────────────────────────────────────────────────────
   const [sellerTitle, setSellerTitle] = useState("");
   const [sellerLoc, setSellerLoc] = useState("");
   const [sellerSqft, setSellerSqft] = useState(1200);
@@ -30,15 +49,58 @@ export default function Home() {
   const [sellerName, setSellerName] = useState("");
   const [sellerPhone, setSellerPhone] = useState("");
   const [listingSuccess, setListingSuccess] = useState(false);
-  const [sellerValuation, setSellerValuation] = useState<PredictionResult | null>(null);
+  const [sellerValuation, setSellerValuation] =
+    useState<PredictionResult | null>(null);
+  const [sellerLoading, setSellerLoading] = useState(false);
 
-  // ── Listings state ─────────────────────────────────────────────────────────
+  // ── Listings state ────────────────────────────────────────────────────────
   const [listings, setListings] = useState<HomeListing[]>([]);
   const [filterLocation, setFilterLocation] = useState("all");
   const [filterBhk, setFilterBhk] = useState("all");
   const [filterPrice, setFilterPrice] = useState("all");
 
-  // ── Helper: switch tab & scroll to the interactive section ────────────────
+  // ── On mount: fetch locations and health ──────────────────────────────────
+  useEffect(() => {
+    fetchLocations()
+      .then((locs) => setApiLocations(locs))
+      .catch((err: ApiError) =>
+        setLocationsError(err.message ?? "Failed to load locations")
+      );
+
+    fetchHealth()
+      .then((h) => setHealthData(h))
+      .catch(() => {
+        /* non-critical — footer just won't show R² */
+      });
+  }, []);
+
+  // ── Load listings on mount ────────────────────────────────────────────────
+  useEffect(() => {
+    setListings(getStoredListings());
+  }, []);
+
+  // ── Live API valuation for seller as they type ────────────────────────────
+  useEffect(() => {
+    if (!sellerLoc || sellerSqft <= 0 || sellerBhk <= 0 || sellerBath <= 0)
+      return;
+
+    const timer = setTimeout(() => {
+      setSellerLoading(true);
+      fetchPrediction({
+        location: sellerLoc,
+        sqft: sellerSqft,
+        bhk: sellerBhk,
+        bath: sellerBath,
+      })
+        .then((r) => setSellerValuation(r))
+        .catch(() => setSellerValuation(null))
+        .finally(() => setSellerLoading(false));
+    }, 600); // debounce 600 ms
+
+    return () => clearTimeout(timer);
+  }, [sellerLoc, sellerSqft, sellerBhk, sellerBath]);
+
+  // ── Helper: switch tab & scroll ───────────────────────────────────────────
   const switchToTab = useCallback((tab: "predictor" | "seller") => {
     setActiveTab(tab);
     setTimeout(() => {
@@ -47,60 +109,78 @@ export default function Home() {
     }, 60);
   }, []);
 
-  // ── Respond to hash in URL (navbar links use #sell-home) ──────────────────
+  // ── Hash routing ──────────────────────────────────────────────────────────
   useEffect(() => {
     const handleHash = () => {
-      if (window.location.hash === "#sell-home") {
-        switchToTab("seller");
-      } else if (window.location.hash === "#predictor") {
-        switchToTab("predictor");
-      }
+      if (window.location.hash === "#sell-home") switchToTab("seller");
+      else if (window.location.hash === "#predictor") switchToTab("predictor");
     };
     handleHash();
     window.addEventListener("hashchange", handleHash);
     return () => window.removeEventListener("hashchange", handleHash);
   }, [switchToTab]);
 
-  // ── Load listings on mount ─────────────────────────────────────────────────
-  useEffect(() => {
-    setListings(getStoredListings());
-  }, []);
-
-  // ── Live AI valuation for seller as they type ──────────────────────────────
-  useEffect(() => {
-    if (sellerLoc && sellerSqft > 0 && sellerBhk > 0 && sellerBath > 0) {
-      setSellerValuation(predictHomePriceClient(sellerLoc, sellerSqft, sellerBhk, sellerBath));
-    } else {
-      setSellerValuation(null);
-    }
-  }, [sellerLoc, sellerSqft, sellerBhk, sellerBath]);
-
-  // ── Buyer predict ──────────────────────────────────────────────────────────
-  const handleEstimatePrice = (e: React.FormEvent) => {
+  // ── Buyer predict — calls POST /api/predict ───────────────────────────────
+  const handleEstimatePrice = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!predictorLoc) { alert("Please select a location first."); return; }
+    if (!predictorLoc) {
+      alert("Please select a location first.");
+      return;
+    }
     setLoading(true);
     setPrediction(null);
-    setTimeout(() => {
-      setPrediction(predictHomePriceClient(predictorLoc, predictorSqft, predictorBhk, predictorBath));
+    setPredictionError(null);
+    try {
+      const result = await fetchPrediction({
+        location: predictorLoc,
+        sqft: predictorSqft,
+        bhk: predictorBhk,
+        bath: predictorBath,
+      });
+      setPrediction(result);
+    } catch (err: unknown) {
+      const apiErr = err as ApiError;
+      setPredictionError(
+        apiErr.detail ?? apiErr.message ?? "Prediction failed. Please retry."
+      );
+    } finally {
       setLoading(false);
-    }, 650);
+    }
   };
 
-  // ── Seller submit ──────────────────────────────────────────────────────────
+  // ── Seller submit ─────────────────────────────────────────────────────────
   const handleListHome = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!sellerLoc) { alert("Please select a location."); return; }
-    if (!sellerTitle || !sellerName || !sellerPhone) { alert("Please fill in all details."); return; }
-
-    addStoredListing({ title: sellerTitle, location: sellerLoc, bhk: sellerBhk, bath: sellerBath,
-      total_sqft: sellerSqft, balcony: sellerBalcony, asking_price_lakhs: sellerPrice,
-      seller_name: sellerName, seller_phone: sellerPhone });
-
+    if (!sellerLoc) {
+      alert("Please select a location.");
+      return;
+    }
+    if (!sellerTitle || !sellerName || !sellerPhone) {
+      alert("Please fill in all details.");
+      return;
+    }
+    addStoredListing({
+      title: sellerTitle,
+      location: sellerLoc,
+      bhk: sellerBhk,
+      bath: sellerBath,
+      total_sqft: sellerSqft,
+      balcony: sellerBalcony,
+      asking_price_lakhs: sellerPrice,
+      seller_name: sellerName,
+      seller_phone: sellerPhone,
+    });
     setListings(getStoredListings());
     setListingSuccess(true);
-    setSellerTitle(""); setSellerLoc(""); setSellerSqft(1200); setSellerBhk(2);
-    setSellerBath(2); setSellerBalcony(1); setSellerPrice(80); setSellerName(""); setSellerPhone("");
+    setSellerTitle("");
+    setSellerLoc("");
+    setSellerSqft(1200);
+    setSellerBhk(2);
+    setSellerBath(2);
+    setSellerBalcony(1);
+    setSellerPrice(80);
+    setSellerName("");
+    setSellerPhone("");
     setTimeout(() => setListingSuccess(false), 5000);
     setTimeout(() => {
       document.getElementById("listings")?.scrollIntoView({ behavior: "smooth" });
@@ -108,17 +188,26 @@ export default function Home() {
   };
 
   const fmt = (lakhs: number) =>
-    lakhs >= 100 ? `₹ ${(lakhs / 100).toFixed(2)} Cr` : `₹ ${lakhs.toFixed(1)} L`;
+    lakhs >= 100
+      ? `₹ ${(lakhs / 100).toFixed(2)} Cr`
+      : `₹ ${lakhs.toFixed(1)} L`;
 
   const fmtFull = (lakhs: number) =>
-    lakhs >= 100 ? `₹ ${(lakhs / 100).toFixed(2)} Crores` : `₹ ${lakhs.toFixed(1)} Lakhs`;
+    lakhs >= 100
+      ? `₹ ${(lakhs / 100).toFixed(2)} Crores`
+      : `₹ ${lakhs.toFixed(1)} Lakhs`;
 
   const filteredListings = listings.filter((item) => {
-    if (filterLocation !== "all" && item.location.toLowerCase() !== filterLocation.toLowerCase()) return false;
+    if (
+      filterLocation !== "all" &&
+      item.location.toLowerCase() !== filterLocation.toLowerCase()
+    )
+      return false;
     if (filterBhk !== "all") {
       const n = parseInt(filterBhk);
-      if (n === 4 && item.bhk >= 4) { /* pass */ }
-      else if (item.bhk !== n) return false;
+      if (n === 4 && item.bhk >= 4) {
+        /* pass */
+      } else if (item.bhk !== n) return false;
     }
     if (filterPrice !== "all") {
       const p = item.asking_price_lakhs;
@@ -129,11 +218,12 @@ export default function Home() {
     return true;
   });
 
-  const listedLocations = Array.from(new Set(listings.map((i) => i.location))).sort();
+  const listedLocations = Array.from(
+    new Set(listings.map((i) => i.location))
+  ).sort();
 
   return (
     <div className={styles.mainContainer}>
-
       {/* ── Hero ────────────────────────────────────────────────────────────── */}
       <section className={styles.heroSection}>
         <div className={styles.badge}>
@@ -142,35 +232,53 @@ export default function Home() {
         </div>
 
         <h1 className={styles.heroTitle}>
-          Smart Home Price Prediction<br />
+          Smart Home Price Prediction
+          <br />
           in <span className={styles.heroAccent}>Bengaluru</span>
         </h1>
 
         <p className={styles.heroSubtitle}>
-          Get instant, data-driven property valuations based on 7,400+ real Bengaluru
+          Get instant, data-driven property valuations backed by real Bengaluru
           transactions — or list your home with live AI market comparison.
         </p>
 
         {/* Stats Bar */}
         <div className={styles.statsBar}>
           <div className={styles.statItem}>
-            <span className={styles.statNum}>7,430+</span>
+            <span className={styles.statNum}>
+              {healthData?.dataset_size
+                ? healthData.dataset_size.toLocaleString("en-IN") + "+"
+                : "13,000+"}
+            </span>
             <span className={styles.statLabel}>Transactions Analysed</span>
           </div>
           <div className={styles.statDivider}></div>
           <div className={styles.statItem}>
-            <span className={styles.statNum}>240+</span>
+            <span className={styles.statNum}>
+              {apiLocations.length > 0
+                ? `${apiLocations.length}+`
+                : "240+"}
+            </span>
             <span className={styles.statLabel}>Bengaluru Localities</span>
           </div>
           <div className={styles.statDivider}></div>
           <div className={styles.statItem}>
-            <span className={styles.statNum}>74.8%</span>
-            <span className={styles.statLabel}>Model Accuracy (R²)</span>
+            <span className={styles.statNum}>
+              {healthData?.r2_score
+                ? `${(healthData.r2_score * 100).toFixed(1)}%`
+                : "—"}
+            </span>
+            <span className={styles.statLabel}>
+              Model Accuracy (R²){" "}
+              {healthData?.model_version
+                ? `· ${healthData.model_version}`
+                : ""}
+            </span>
           </div>
           <div className={styles.statDivider}></div>
           <div className={styles.statItem}>
-            <span className={styles.statNum}>Instant</span>
-            <span className={styles.statLabel}>Zero-Latency Results</span>
+            <span className={styles.statNum}>±8%</span>
+            <span className={styles.statLabel}>Confidence Band</span>
           </div>
         </div>
 
@@ -181,7 +289,16 @@ export default function Home() {
             className={`${styles.tabBtn} ${activeTab === "predictor" ? styles.tabActive : ""}`}
             onClick={() => switchToTab("predictor")}
           >
-            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
             </svg>
             AI Price Calculator
@@ -191,7 +308,16 @@ export default function Home() {
             className={`${styles.tabBtn} ${activeTab === "seller" ? styles.tabActive : ""}`}
             onClick={() => switchToTab("seller")}
           >
-            <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
               <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
               <polyline points="9 22 9 12 15 12 15 22"></polyline>
             </svg>
@@ -200,36 +326,103 @@ export default function Home() {
         </div>
       </section>
 
-      {/* ── Interactive Area ────────────────────────────────────────────────── */}
+      {/* ── Interactive Area ─────────────────────────────────────────────────── */}
       <section className={styles.interactiveArea} id="interactive-section">
+        {/* Location fetch error banner */}
+        {locationsError && (
+          <div
+            style={{
+              background: "#fef2f2",
+              border: "1px solid #fca5a5",
+              borderRadius: "0.5rem",
+              padding: "0.75rem 1rem",
+              color: "#991b1b",
+              marginBottom: "1rem",
+              fontSize: "0.875rem",
+            }}
+          >
+            ⚠️ Could not load locations from API: {locationsError}. Check that
+            the backend is running.
+          </div>
+        )}
 
         {activeTab === "predictor" ? (
           /* ─ BUYER PREDICTOR ─ */
           <div className={styles.gridSplitter}>
-            <form className={styles.featureCard} onSubmit={handleEstimatePrice} id="predictor">
+            <form
+              className={styles.featureCard}
+              onSubmit={handleEstimatePrice}
+              id="predictor"
+            >
               <div className={styles.cardHeader}>
-                <div className={styles.cardIconWrap} style={{ background: "linear-gradient(135deg,#4f46e5,#818cf8)" }}>
-                  <svg viewBox="0 0 24 24" width="18" height="18" stroke="#fff" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                <div
+                  className={styles.cardIconWrap}
+                  style={{
+                    background: "linear-gradient(135deg,#4f46e5,#818cf8)",
+                  }}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    stroke="#fff"
+                    strokeWidth="2.5"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <polyline points="22 12 18 12 15 21 9 3 6 12 2 12"></polyline>
                   </svg>
                 </div>
                 <div>
                   <h2 className={styles.cardTitle}>Estimate Home Price</h2>
-                  <p className={styles.cardDesc}>Enter property features for an instant AI-powered valuation.</p>
+                  <p className={styles.cardDesc}>
+                    Enter property features for an AI-powered server-side
+                    valuation.
+                  </p>
                 </div>
               </div>
 
-              <CustomDropdown selectedLocation={predictorLoc} onChange={setPredictorLoc} locationsList={locations} />
+              <CustomDropdown
+                selectedLocation={predictorLoc}
+                onChange={setPredictorLoc}
+                locationsList={apiLocations}
+              />
+
+              {apiLocations.length === 0 && !locationsError && (
+                <p
+                  style={{
+                    fontSize: "0.8rem",
+                    color: "#64748b",
+                    marginBottom: "0.5rem",
+                  }}
+                >
+                  ⏳ Loading locations from API…
+                </p>
+              )}
 
               <div className="sliderWrapper">
                 <div className="sliderHeader">
                   <label className="customInputLabel">Total Area</label>
-                  <span className="sliderValueText">{predictorSqft.toLocaleString()} sqft</span>
+                  <span className="sliderValueText">
+                    {predictorSqft.toLocaleString()} sqft
+                  </span>
                 </div>
-                <input type="range" className="sliderControl" min="300" max="6000" step="50"
-                  value={predictorSqft} onChange={(e) => setPredictorSqft(parseInt(e.target.value))} />
+                <input
+                  type="range"
+                  className="sliderControl"
+                  min="300"
+                  max="6000"
+                  step="50"
+                  value={predictorSqft}
+                  onChange={(e) => setPredictorSqft(parseInt(e.target.value))}
+                />
                 <div className={styles.sliderMarks}>
-                  <span>300</span><span>1,500</span><span>3,000</span><span>4,500</span><span>6,000</span>
+                  <span>300</span>
+                  <span>1,500</span>
+                  <span>3,000</span>
+                  <span>4,500</span>
+                  <span>6,000</span>
                 </div>
               </div>
 
@@ -238,9 +431,14 @@ export default function Home() {
                   <label className="customInputLabel">BHK Size</label>
                   <div className={styles.chipGroup}>
                     {[1, 2, 3, 4, 5].map((v) => (
-                      <button key={v} type="button"
+                      <button
+                        key={v}
+                        type="button"
                         className={`${styles.chip} ${predictorBhk === v ? styles.chipActive : ""}`}
-                        onClick={() => setPredictorBhk(v)}>{v === 5 ? "5+" : v}</button>
+                        onClick={() => setPredictorBhk(v)}
+                      >
+                        {v === 5 ? "5+" : v}
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -249,19 +447,42 @@ export default function Home() {
                   <label className="customInputLabel">Bathrooms</label>
                   <div className={styles.chipGroup}>
                     {[1, 2, 3, 4, 5].map((v) => (
-                      <button key={v} type="button"
+                      <button
+                        key={v}
+                        type="button"
                         className={`${styles.chip} ${predictorBath === v ? styles.chipActive : ""}`}
-                        onClick={() => setPredictorBath(v)}>{v === 5 ? "5+" : v}</button>
+                        onClick={() => setPredictorBath(v)}
+                      >
+                        {v === 5 ? "5+" : v}
+                      </button>
                     ))}
                   </div>
                 </div>
               </div>
 
-              <button type="submit" className={styles.actionBtn}>
-                {loading
-                  ? <><span className={styles.spinner}></span> Analysing…</>
-                  : <><svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg> Predict Home Price</>
-                }
+              <button type="submit" className={styles.actionBtn} disabled={loading}>
+                {loading ? (
+                  <>
+                    <span className={styles.spinner}></span> Contacting AI
+                    Model…
+                  </>
+                ) : (
+                  <>
+                    <svg
+                      viewBox="0 0 24 24"
+                      width="16"
+                      height="16"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      fill="none"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <polygon points="5 3 19 12 5 21 5 3"></polygon>
+                    </svg>{" "}
+                    Predict Home Price
+                  </>
+                )}
               </button>
             </form>
 
@@ -270,26 +491,72 @@ export default function Home() {
               {loading ? (
                 <div className={styles.emptyState}>
                   <div className={styles.pulseRing}></div>
-                  <div className={styles.emptyTitle} style={{ marginTop: "1.5rem" }}>Running AI Model…</div>
-                  <p className={styles.emptyText}>Analysing location premiums, market trends and property metrics.</p>
+                  <div
+                    className={styles.emptyTitle}
+                    style={{ marginTop: "1.5rem" }}
+                  >
+                    Querying AI Model…
+                  </div>
+                  <p className={styles.emptyText}>
+                    Sending your inputs to the prediction server. This takes
+                    less than a second.
+                  </p>
+                </div>
+              ) : predictionError ? (
+                <div
+                  className={styles.emptyState}
+                  style={{ textAlign: "center" }}
+                >
+                  <div
+                    style={{
+                      fontSize: "2.5rem",
+                      marginBottom: "0.75rem",
+                    }}
+                  >
+                    ⚠️
+                  </div>
+                  <div className={styles.emptyTitle} style={{ color: "#dc2626" }}>
+                    Prediction Error
+                  </div>
+                  <p className={styles.emptyText}>{predictionError}</p>
+                  <button
+                    className={styles.recalcBtn}
+                    onClick={() => setPredictionError(null)}
+                  >
+                    ← Try Again
+                  </button>
                 </div>
               ) : prediction ? (
                 <div className={styles.resultContent}>
-                  <div className={styles.resultLabel}>Estimated Market Value</div>
-                  <div className={styles.resultBigVal}>{fmtFull(prediction.predictedPriceLakhs)}</div>
-                  <div className={styles.perSqftPill}>₹ {prediction.pricePerSqft.toLocaleString("en-IN")} / sqft avg.</div>
+                  <div className={styles.resultLabel}>
+                    Estimated Market Value
+                  </div>
+                  <div className={styles.resultBigVal}>
+                    {fmtFull(prediction.predicted_price)}
+                  </div>
+                  <div className={styles.perSqftPill}>
+                    ±8% confidence band
+                  </div>
 
+                  {/* Confidence range visual band */}
                   <div className={styles.rangeBar}>
                     <div className={styles.rangeEnd}>
-                      <span className={styles.rangeEndLabel}>Min</span>
-                      <span className={styles.rangeEndVal}>{fmt(prediction.priceRangeMin)}</span>
+                      <span className={styles.rangeEndLabel}>Low</span>
+                      <span className={styles.rangeEndVal}>
+                        {fmt(prediction.confidence_range[0])}
+                      </span>
                     </div>
                     <div className={styles.rangeLine}>
                       <div className={styles.rangeDot}></div>
                     </div>
-                    <div className={styles.rangeEnd} style={{ textAlign: "right" }}>
-                      <span className={styles.rangeEndLabel}>Max</span>
-                      <span className={styles.rangeEndVal}>{fmt(prediction.priceRangeMax)}</span>
+                    <div
+                      className={styles.rangeEnd}
+                      style={{ textAlign: "right" }}
+                    >
+                      <span className={styles.rangeEndLabel}>High</span>
+                      <span className={styles.rangeEndVal}>
+                        {fmt(prediction.confidence_range[1])}
+                      </span>
                     </div>
                   </div>
 
@@ -300,15 +567,26 @@ export default function Home() {
                     </div>
                     <div className={styles.metricRow}>
                       <span className={styles.metricLabel}>Configuration</span>
-                      <span className={styles.metricVal}>{predictorBhk} BHK · {predictorBath} Bath · {predictorSqft.toLocaleString()} sqft</span>
+                      <span className={styles.metricVal}>
+                        {predictorBhk} BHK · {predictorBath} Bath ·{" "}
+                        {predictorSqft.toLocaleString()} sqft
+                      </span>
                     </div>
                     <div className={styles.metricRow}>
-                      <span className={styles.metricLabel}>Data Source</span>
-                      <span className={styles.metricVal}>7,430 verified Bengaluru transactions</span>
+                      <span className={styles.metricLabel}>Model</span>
+                      <span className={styles.metricVal}>
+                        {healthData?.model_version ?? "ML Backend"}
+                        {healthData?.r2_score
+                          ? ` (R²=${(healthData.r2_score * 100).toFixed(1)}%)`
+                          : ""}
+                      </span>
                     </div>
                   </div>
 
-                  <button className={styles.recalcBtn} onClick={() => setPrediction(null)}>
+                  <button
+                    className={styles.recalcBtn}
+                    onClick={() => setPrediction(null)}
+                  >
                     ← Recalculate
                   </button>
                 </div>
@@ -316,67 +594,149 @@ export default function Home() {
                 <div className={styles.emptyState}>
                   <div className={styles.emptyIllustration}>
                     <svg viewBox="0 0 80 80" width="80" height="80" fill="none">
-                      <circle cx="40" cy="40" r="38" stroke="#e2e8f0" strokeWidth="2"/>
-                      <rect x="22" y="38" width="8" height="20" rx="2" fill="#cbd5e1"/>
-                      <rect x="34" y="28" width="8" height="30" rx="2" fill="#94a3b8"/>
-                      <rect x="46" y="20" width="8" height="38" rx="2" fill="#4f46e5"/>
-                      <line x1="18" y1="60" x2="62" y2="60" stroke="#e2e8f0" strokeWidth="2" strokeLinecap="round"/>
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="38"
+                        stroke="#e2e8f0"
+                        strokeWidth="2"
+                      />
+                      <rect
+                        x="22"
+                        y="38"
+                        width="8"
+                        height="20"
+                        rx="2"
+                        fill="#cbd5e1"
+                      />
+                      <rect
+                        x="34"
+                        y="28"
+                        width="8"
+                        height="30"
+                        rx="2"
+                        fill="#94a3b8"
+                      />
+                      <rect
+                        x="46"
+                        y="20"
+                        width="8"
+                        height="38"
+                        rx="2"
+                        fill="#4f46e5"
+                      />
+                      <line
+                        x1="18"
+                        y1="60"
+                        x2="62"
+                        y2="60"
+                        stroke="#e2e8f0"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                      />
                     </svg>
                   </div>
                   <div className={styles.emptyTitle}>Price Dashboard</div>
-                  <p className={styles.emptyText}>Choose your location, area, and configuration, then hit <strong>Predict</strong> to see an AI-driven valuation.</p>
+                  <p className={styles.emptyText}>
+                    Choose your location, area, and configuration, then hit{" "}
+                    <strong>Predict</strong> to get a server-side AI valuation.
+                  </p>
                 </div>
               )}
             </div>
           </div>
-
         ) : (
           /* ─ SELLER PORTAL ─ */
           <div className={styles.gridSplitter} id="sell-home">
             <form className={styles.featureCard} onSubmit={handleListHome}>
               <div className={styles.cardHeader}>
-                <div className={styles.cardIconWrap} style={{ background: "linear-gradient(135deg,#10b981,#34d399)" }}>
-                  <svg viewBox="0 0 24 24" width="18" height="18" stroke="#fff" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                <div
+                  className={styles.cardIconWrap}
+                  style={{
+                    background: "linear-gradient(135deg,#10b981,#34d399)",
+                  }}
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="18"
+                    height="18"
+                    stroke="#fff"
+                    strokeWidth="2.5"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path>
                     <polyline points="9 22 9 12 15 12 15 22"></polyline>
                   </svg>
                 </div>
                 <div>
                   <h2 className={styles.cardTitle}>List Your Home for Sale</h2>
-                  <p className={styles.cardDesc}>Reach Bengaluru buyers. Get real-time AI pricing guidance as you list.</p>
+                  <p className={styles.cardDesc}>
+                    Reach Bengaluru buyers. Get real-time AI pricing guidance as
+                    you list.
+                  </p>
                 </div>
               </div>
 
               {listingSuccess && (
                 <div className={styles.successBanner}>
-                  <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" strokeWidth="3" fill="none" strokeLinecap="round" strokeLinejoin="round">
+                  <svg
+                    viewBox="0 0 24 24"
+                    width="20"
+                    height="20"
+                    stroke="currentColor"
+                    strokeWidth="3"
+                    fill="none"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
                     <path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"></path>
                     <polyline points="22 4 12 14.01 9 11.01"></polyline>
                   </svg>
-                  Property listed successfully! It now appears on the Listings Board below.
+                  Property listed successfully! It now appears on the Listings
+                  Board below.
                 </div>
               )}
 
               <div className={styles.formGrid}>
                 <div className={`customInputGroup ${styles.colSpan2}`}>
                   <label className="customInputLabel">Listing Title</label>
-                  <input type="text" className="customTextInput"
+                  <input
+                    type="text"
+                    className="customTextInput"
                     placeholder="e.g. Spacious 3 BHK in Gated Society with Club House"
-                    value={sellerTitle} onChange={(e) => setSellerTitle(e.target.value)} required />
+                    value={sellerTitle}
+                    onChange={(e) => setSellerTitle(e.target.value)}
+                    required
+                  />
                 </div>
 
                 <div className={styles.colSpan2}>
-                  <CustomDropdown selectedLocation={sellerLoc} onChange={setSellerLoc} locationsList={locations} />
+                  <CustomDropdown
+                    selectedLocation={sellerLoc}
+                    onChange={setSellerLoc}
+                    locationsList={apiLocations}
+                  />
                 </div>
 
                 <div className={styles.colSpan2}>
                   <div className="sliderWrapper">
                     <div className="sliderHeader">
                       <label className="customInputLabel">Total Area</label>
-                      <span className="sliderValueText">{sellerSqft.toLocaleString()} sqft</span>
+                      <span className="sliderValueText">
+                        {sellerSqft.toLocaleString()} sqft
+                      </span>
                     </div>
-                    <input type="range" className="sliderControl" min="300" max="6000" step="50"
-                      value={sellerSqft} onChange={(e) => setSellerSqft(parseInt(e.target.value))} />
+                    <input
+                      type="range"
+                      className="sliderControl"
+                      min="300"
+                      max="6000"
+                      step="50"
+                      value={sellerSqft}
+                      onChange={(e) => setSellerSqft(parseInt(e.target.value))}
+                    />
                   </div>
                 </div>
 
@@ -384,9 +744,14 @@ export default function Home() {
                   <label className="customInputLabel">BHK Size</label>
                   <div className={styles.chipGroup}>
                     {[1, 2, 3, 4].map((v) => (
-                      <button key={v} type="button"
+                      <button
+                        key={v}
+                        type="button"
                         className={`${styles.chip} ${sellerBhk === v ? styles.chipActive : ""}`}
-                        onClick={() => setSellerBhk(v)}>{v} BHK</button>
+                        onClick={() => setSellerBhk(v)}
+                      >
+                        {v} BHK
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -395,9 +760,14 @@ export default function Home() {
                   <label className="customInputLabel">Bathrooms</label>
                   <div className={styles.chipGroup}>
                     {[1, 2, 3, 4].map((v) => (
-                      <button key={v} type="button"
+                      <button
+                        key={v}
+                        type="button"
                         className={`${styles.chip} ${sellerBath === v ? styles.chipActive : ""}`}
-                        onClick={() => setSellerBath(v)}>{v}</button>
+                        onClick={() => setSellerBath(v)}
+                      >
+                        {v}
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -406,9 +776,14 @@ export default function Home() {
                   <label className="customInputLabel">Balconies</label>
                   <div className={styles.chipGroup}>
                     {[0, 1, 2, 3].map((v) => (
-                      <button key={v} type="button"
+                      <button
+                        key={v}
+                        type="button"
                         className={`${styles.chip} ${sellerBalcony === v ? styles.chipActive : ""}`}
-                        onClick={() => setSellerBalcony(v)}>{v}</button>
+                        onClick={() => setSellerBalcony(v)}
+                      >
+                        {v}
+                      </button>
                     ))}
                   </div>
                 </div>
@@ -416,12 +791,25 @@ export default function Home() {
                 <div className="customInputGroup">
                   <div className="sliderHeader">
                     <label className="customInputLabel">Asking Price</label>
-                    <span className="sliderValueText" style={{ color: "var(--accent-color)", backgroundColor: "var(--accent-light-bg)" }}>
+                    <span
+                      className="sliderValueText"
+                      style={{
+                        color: "var(--accent-color)",
+                        backgroundColor: "var(--accent-light-bg)",
+                      }}
+                    >
                       {fmtFull(sellerPrice)}
                     </span>
                   </div>
-                  <input type="range" className="sliderControl" min="15" max="600" step="5"
-                    value={sellerPrice} onChange={(e) => setSellerPrice(parseInt(e.target.value))} />
+                  <input
+                    type="range"
+                    className="sliderControl"
+                    min="15"
+                    max="600"
+                    step="5"
+                    value={sellerPrice}
+                    onChange={(e) => setSellerPrice(parseInt(e.target.value))}
+                  />
                 </div>
 
                 <div className={styles.colSpan2}>
@@ -432,20 +820,45 @@ export default function Home() {
 
                 <div className="customInputGroup">
                   <label className="customInputLabel">Your Name</label>
-                  <input type="text" className="customTextInput" placeholder="e.g. Ramesh Kumar"
-                    value={sellerName} onChange={(e) => setSellerName(e.target.value)} required />
+                  <input
+                    type="text"
+                    className="customTextInput"
+                    placeholder="e.g. Ramesh Kumar"
+                    value={sellerName}
+                    onChange={(e) => setSellerName(e.target.value)}
+                    required
+                  />
                 </div>
 
                 <div className="customInputGroup">
                   <label className="customInputLabel">Phone Number</label>
-                  <input type="tel" className="customTextInput" placeholder="+91 98450 00000"
-                    value={sellerPhone} onChange={(e) => setSellerPhone(e.target.value)} required />
+                  <input
+                    type="tel"
+                    className="customTextInput"
+                    placeholder="+91 98450 00000"
+                    value={sellerPhone}
+                    onChange={(e) => setSellerPhone(e.target.value)}
+                    required
+                  />
                 </div>
               </div>
 
-              <button type="submit" className={`${styles.actionBtn} ${styles.actionBtnGreen}`}>
-                <svg viewBox="0 0 24 24" width="16" height="16" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-                  <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+              <button
+                type="submit"
+                className={`${styles.actionBtn} ${styles.actionBtnGreen}`}
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  width="16"
+                  height="16"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  fill="none"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="12" y1="5" x2="12" y2="19"></line>
+                  <line x1="5" y1="12" x2="19" y2="12"></line>
                 </svg>
                 List Property Now
               </button>
@@ -453,32 +866,71 @@ export default function Home() {
 
             {/* Seller Valuation Panel */}
             <div className={styles.resultPane}>
-              {sellerValuation ? (
+              {sellerLoading ? (
+                <div className={styles.emptyState}>
+                  <div className={styles.pulseRing}></div>
+                  <div
+                    className={styles.emptyTitle}
+                    style={{ marginTop: "1.5rem" }}
+                  >
+                    Querying AI Valuation…
+                  </div>
+                </div>
+              ) : sellerValuation ? (
                 <div className={styles.resultContent}>
                   <div className={styles.resultLabel}>Live AI Valuation</div>
-                  <div className={styles.resultBigVal} style={{ color: "var(--accent-color)" }}>
-                    {fmtFull(sellerValuation.predictedPriceLakhs)}
+                  <div
+                    className={styles.resultBigVal}
+                    style={{ color: "var(--accent-color)" }}
+                  >
+                    {fmtFull(sellerValuation.predicted_price)}
                   </div>
-                  <div className={styles.perSqftPill} style={{ background: "var(--accent-light-bg)", color: "var(--accent-dark)" }}>
-                    ₹ {sellerValuation.pricePerSqft.toLocaleString("en-IN")} / sqft market rate
+                  <div
+                    className={styles.perSqftPill}
+                    style={{
+                      background: "var(--accent-light-bg)",
+                      color: "var(--accent-dark)",
+                    }}
+                  >
+                    ±8% band: {fmt(sellerValuation.confidence_range[0])} –{" "}
+                    {fmt(sellerValuation.confidence_range[1])}
                   </div>
 
                   {/* Deal analysis badge */}
                   {(() => {
-                    const a = analyzeAskingPrice(sellerPrice, sellerValuation.predictedPriceLakhs);
-                    const colors: Record<string, { bg: string; text: string }> = {
+                    const a = analyzeAskingPrice(
+                      sellerPrice,
+                      sellerValuation.predicted_price
+                    );
+                    const colors: Record<
+                      string,
+                      { bg: string; text: string }
+                    > = {
                       "deal-below": { bg: "#d1fae5", text: "#065f46" },
                       "deal-fair": { bg: "#eef2ff", text: "#3730a3" },
                       "deal-premium": { bg: "#fef3c7", text: "#92400e" },
                     };
-                    const c = colors[a.badgeClass] || colors["deal-fair"];
+                    const c =
+                      colors[a.badgeClass] ?? colors["deal-fair"];
                     return (
-                      <div className={styles.dealAnalysisCard} style={{ background: c.bg, color: c.text }}>
+                      <div
+                        className={styles.dealAnalysisCard}
+                        style={{ background: c.bg, color: c.text }}
+                      >
                         <strong>{a.badgeText}</strong>
-                        <p style={{ marginTop: "0.25rem", fontSize: "0.82rem", opacity: 0.85 }}>
-                          {a.badgeClass === "deal-below" && "Your asking price is below market — buyers will love this!"}
-                          {a.badgeClass === "deal-fair" && "Your price aligns with AI market value. Well positioned!"}
-                          {a.badgeClass === "deal-premium" && "Priced above market average. Consider adjusting to sell faster."}
+                        <p
+                          style={{
+                            marginTop: "0.25rem",
+                            fontSize: "0.82rem",
+                            opacity: 0.85,
+                          }}
+                        >
+                          {a.badgeClass === "deal-below" &&
+                            "Your asking price is below market — buyers will love this!"}
+                          {a.badgeClass === "deal-fair" &&
+                            "Your price aligns with AI market value. Well positioned!"}
+                          {a.badgeClass === "deal-premium" &&
+                            "Priced above market average. Consider adjusting to sell faster."}
                         </p>
                       </div>
                     );
@@ -486,16 +938,23 @@ export default function Home() {
 
                   <div className={styles.metricsReport}>
                     <div className={styles.metricRow}>
-                      <span className={styles.metricLabel}>Your Asking Price</span>
-                      <span className={styles.metricVal}>{fmtFull(sellerPrice)}</span>
+                      <span className={styles.metricLabel}>
+                        Your Asking Price
+                      </span>
+                      <span className={styles.metricVal}>
+                        {fmtFull(sellerPrice)}
+                      </span>
                     </div>
                     <div className={styles.metricRow}>
-                      <span className={styles.metricLabel}>Your Rate / sqft</span>
-                      <span className={styles.metricVal}>₹ {Math.round((sellerPrice * 100000) / sellerSqft).toLocaleString("en-IN")}</span>
-                    </div>
-                    <div className={styles.metricRow}>
-                      <span className={styles.metricLabel}>Market Rate / sqft</span>
-                      <span className={styles.metricVal}>₹ {sellerValuation.pricePerSqft.toLocaleString("en-IN")}</span>
+                      <span className={styles.metricLabel}>
+                        Your Rate / sqft
+                      </span>
+                      <span className={styles.metricVal}>
+                        ₹{" "}
+                        {Math.round(
+                          (sellerPrice * 100000) / sellerSqft
+                        ).toLocaleString("en-IN")}
+                      </span>
                     </div>
                     <div className={styles.metricRow}>
                       <span className={styles.metricLabel}>Location</span>
@@ -507,13 +966,28 @@ export default function Home() {
                 <div className={styles.emptyState}>
                   <div className={styles.emptyIllustration}>
                     <svg viewBox="0 0 80 80" width="80" height="80" fill="none">
-                      <circle cx="40" cy="40" r="38" stroke="#e2e8f0" strokeWidth="2"/>
-                      <path d="M20 52L32 36l10 8 10-14 8 6" stroke="#cbd5e1" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"/>
-                      <circle cx="40" cy="38" r="4" fill="#10b981"/>
+                      <circle
+                        cx="40"
+                        cy="40"
+                        r="38"
+                        stroke="#e2e8f0"
+                        strokeWidth="2"
+                      />
+                      <path
+                        d="M20 52L32 36l10 8 10-14 8 6"
+                        stroke="#cbd5e1"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                      <circle cx="40" cy="38" r="4" fill="#10b981" />
                     </svg>
                   </div>
                   <div className={styles.emptyTitle}>Live AI Valuation</div>
-                  <p className={styles.emptyText}>Select your location and property details to see a real-time AI market valuation update here as you type.</p>
+                  <p className={styles.emptyText}>
+                    Select your location and property details to see a
+                    real-time server-side valuation update here.
+                  </p>
                 </div>
               )}
             </div>
@@ -521,29 +995,46 @@ export default function Home() {
         )}
       </section>
 
-      {/* ── Listings Board ──────────────────────────────────────────────────── */}
+      {/* ── Listings Board ────────────────────────────────────────────────────── */}
       <section className={styles.listingsSection} id="listings">
         <div className={styles.listingsTitleBlock}>
           <div>
             <h2 className={styles.listingsSectionTitle}>
               Featured Bengaluru <span>Listings</span>
             </h2>
-            <p className={styles.listingsSubtitle}>Browse actively listed properties from verified sellers across Bengaluru.</p>
+            <p className={styles.listingsSubtitle}>
+              Browse actively listed properties from verified sellers across
+              Bengaluru.
+            </p>
           </div>
-          <span className={styles.listingsCount}>{filteredListings.length} of {listings.length} shown</span>
+          <span className={styles.listingsCount}>
+            {filteredListings.length} of {listings.length} shown
+          </span>
         </div>
 
         <div className={styles.filterControls}>
           <div className={styles.filterItem}>
             <label className={styles.filterLabel}>Location</label>
-            <select className={styles.filterSelect} value={filterLocation} onChange={(e) => setFilterLocation(e.target.value)}>
+            <select
+              className={styles.filterSelect}
+              value={filterLocation}
+              onChange={(e) => setFilterLocation(e.target.value)}
+            >
               <option value="all">All Locations</option>
-              {listedLocations.map((loc) => <option key={loc} value={loc}>{loc}</option>)}
+              {listedLocations.map((loc) => (
+                <option key={loc} value={loc}>
+                  {loc}
+                </option>
+              ))}
             </select>
           </div>
           <div className={styles.filterItem}>
             <label className={styles.filterLabel}>BHK Size</label>
-            <select className={styles.filterSelect} value={filterBhk} onChange={(e) => setFilterBhk(e.target.value)}>
+            <select
+              className={styles.filterSelect}
+              value={filterBhk}
+              onChange={(e) => setFilterBhk(e.target.value)}
+            >
               <option value="all">Any BHK</option>
               <option value="1">1 BHK</option>
               <option value="2">2 BHK</option>
@@ -553,16 +1044,33 @@ export default function Home() {
           </div>
           <div className={styles.filterItem}>
             <label className={styles.filterLabel}>Budget</label>
-            <select className={styles.filterSelect} value={filterPrice} onChange={(e) => setFilterPrice(e.target.value)}>
+            <select
+              className={styles.filterSelect}
+              value={filterPrice}
+              onChange={(e) => setFilterPrice(e.target.value)}
+            >
               <option value="all">Any Budget</option>
               <option value="budget">Under ₹ 60 Lakhs</option>
               <option value="mid">₹ 60 L – ₹ 1.5 Cr</option>
               <option value="premium">Over ₹ 1.5 Crores</option>
             </select>
           </div>
-          <button className={styles.addListingBtn} onClick={() => switchToTab("seller")}>
-            <svg viewBox="0 0 24 24" width="15" height="15" stroke="currentColor" strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round">
-              <line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line>
+          <button
+            className={styles.addListingBtn}
+            onClick={() => switchToTab("seller")}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="15"
+              height="15"
+              stroke="currentColor"
+              strokeWidth="2.5"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <line x1="5" y1="12" x2="19" y2="12"></line>
             </svg>
             Add Listing
           </button>
@@ -570,24 +1078,46 @@ export default function Home() {
 
         <div className={styles.listingsGrid}>
           {filteredListings.length > 0 ? (
-            filteredListings.map((item) => <ListingCard key={item.id} listing={item} />)
+            filteredListings.map((item) => (
+              <ListingCard key={item.id} listing={item} />
+            ))
           ) : (
             <div className={styles.noMatches}>
-              <svg viewBox="0 0 24 24" width="48" height="48" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" style={{ color: "var(--slate-300)" }}>
+              <svg
+                viewBox="0 0 24 24"
+                width="48"
+                height="48"
+                stroke="currentColor"
+                strokeWidth="1.5"
+                fill="none"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                style={{ color: "var(--slate-300)" }}
+              >
                 <circle cx="11" cy="11" r="8"></circle>
                 <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
                 <line x1="8" y1="11" x2="14" y2="11"></line>
               </svg>
-              <div className={styles.noMatchesTitle}>No listings match your filters</div>
-              <p className={styles.noMatchesText}>Try adjusting your filters or browse all available listings.</p>
-              <button className={styles.resetFilterBtn} onClick={() => { setFilterLocation("all"); setFilterBhk("all"); setFilterPrice("all"); }}>
+              <div className={styles.noMatchesTitle}>
+                No listings match your filters
+              </div>
+              <p className={styles.noMatchesText}>
+                Try adjusting your filters or browse all available listings.
+              </p>
+              <button
+                className={styles.resetFilterBtn}
+                onClick={() => {
+                  setFilterLocation("all");
+                  setFilterBhk("all");
+                  setFilterPrice("all");
+                }}
+              >
                 Reset All Filters
               </button>
             </div>
           )}
         </div>
       </section>
-
     </div>
   );
 }

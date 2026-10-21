@@ -1,43 +1,115 @@
+"""
+main.py — Bengaluru Home Price Prediction FastAPI Server
+=========================================================
+Loads a trained scikit-learn / XGBoost model and a frequency-encoded
+location map from server/model/ at startup.  All prediction logic lives
+here; there is zero fallback maths or embedded coefficients.
+"""
+
+import json
+import logging
 import os
 import pickle
-import json
 import time
-import uuid
+from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import Any
 
 import numpy as np
-
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from pydantic import BaseModel, Field, field_validator
 
-from pydantic import BaseModel
-from typing import List, Optional
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
+)
+log = logging.getLogger(__name__)
 
-from prometheus_client import Counter, Histogram, generate_latest, CONTENT_TYPE_LATEST
-from starlette.responses import Response
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_DIR = os.path.join(BASE_DIR, "model")
+MODEL_PATH = os.path.join(MODEL_DIR, "home_price_model.pkl")
+ENCODER_PATH = os.path.join(MODEL_DIR, "location_encoder.pkl")
+METRICS_PATH = os.path.join(BASE_DIR, "..", "model_training", "metrics.json")
 
+# ---------------------------------------------------------------------------
+# Application state (populated at startup)
+# ---------------------------------------------------------------------------
+_state: dict[str, Any] = {
+    "model": None,
+    # location_encoder: dict[str, float]  name → frequency score
+    "location_encoder": None,
+    "metrics": {},
+    "total_predictions": 0,
+    "total_errors": 0,
+    "total_latency_ms": 0.0,
+}
+
+
+# ---------------------------------------------------------------------------
+# Startup / shutdown lifespan
+# ---------------------------------------------------------------------------
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Load model artefacts once at startup; release on shutdown."""
+    _load_artefacts()
+    yield
+    log.info("Server shutting down.")
+
+
+def _load_artefacts() -> None:
+    """Deserialise model and encoder from server/model/.
+
+    Raises RuntimeError if either file is missing.
+    """
+    if not os.path.exists(MODEL_PATH):
+        raise RuntimeError(
+            f"Model not found at {MODEL_PATH}. "
+            "Run model_training/train.py first."
+        )
+    if not os.path.exists(ENCODER_PATH):
+        raise RuntimeError(
+            f"Encoder not found at {ENCODER_PATH}. "
+            "Run model_training/train.py first."
+        )
+
+    with open(MODEL_PATH, "rb") as fh:
+        _state["model"] = pickle.load(fh)
+    log.info("Model loaded from %s", MODEL_PATH)
+
+    with open(ENCODER_PATH, "rb") as fh:
+        _state["location_encoder"] = pickle.load(fh)
+    log.info(
+        "Location encoder loaded (%d locations)", len(_state["location_encoder"])
+    )
+
+    if os.path.exists(METRICS_PATH):
+        with open(METRICS_PATH) as fh:
+            _state["metrics"] = json.load(fh)
+        log.info("Metrics loaded from %s", METRICS_PATH)
+
+
+# ---------------------------------------------------------------------------
+# FastAPI app
+# ---------------------------------------------------------------------------
 
 app = FastAPI(
-    title="Bengaluru House Price Prediction API",
-    version="1.0.0"
+    title="Bengaluru Home Price Prediction API",
+    description=(
+        "Predict Bengaluru residential property prices using a trained ML model. "
+        "No client-side maths — all predictions are server-side."
+    ),
+    version="2.0.0",
+    lifespan=lifespan,
 )
-
-
-REQUEST_COUNT = Counter(
-    "prediction_requests_total",
-    "Total prediction requests"
-)
-
-LATENCY = Histogram(
-    "prediction_latency_seconds",
-    "Prediction latency in seconds"
-)
-
-ERROR_COUNT = Counter(
-    "prediction_errors_total",
-    "Total prediction errors"
-)
-
 
 app.add_middleware(
     CORSMiddleware,
@@ -48,460 +120,199 @@ app.add_middleware(
 )
 
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-MODEL_PATH = os.path.join(
-    BASE_DIR,
-    "..",
-    "model_training",
-    "bengaluru_house_prices_model.pkl"
-)
-
-COLUMNS_PATH = os.path.join(
-    BASE_DIR,
-    "..",
-    "model_training",
-    "columns.json"
-)
-
-LISTINGS_PATH = os.path.join(
-    BASE_DIR,
-    "listings.json"
-)
+# ---------------------------------------------------------------------------
+# Request logging middleware
+# ---------------------------------------------------------------------------
 
 
-model = None
-data_columns = []
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    """Log every inbound request with method, path, and latency."""
+    t0 = time.perf_counter()
+    response = await call_next(request)
+    latency_ms = (time.perf_counter() - t0) * 1000
+    log.info(
+        "%s %s → %d  (%.1f ms)",
+        request.method,
+        request.url.path,
+        response.status_code,
+        latency_ms,
+    )
+    return response
 
 
-def load_saved_artifacts():
-
-    global model, data_columns
-
-    if not os.path.exists(MODEL_PATH) or not os.path.exists(COLUMNS_PATH):
-
-        print(
-            "Warning: Model artifacts not found."
-        )
-
-        return False
+# ---------------------------------------------------------------------------
+# Pydantic schemas
+# ---------------------------------------------------------------------------
 
 
-    with open(COLUMNS_PATH, "r") as f:
-        data_columns = json.load(f)["data_columns"]
+class PredictRequest(BaseModel):
+    """Input schema for /api/predict."""
+
+    location: str = Field(..., description="Bengaluru neighbourhood name")
+    sqft: float = Field(..., gt=0, description="Total built-up area in sq ft")
+    bhk: int = Field(..., ge=1, le=20, description="Number of bedrooms")
+    bath: int = Field(..., ge=1, le=20, description="Number of bathrooms")
+
+    @field_validator("location")
+    @classmethod
+    def location_not_empty(cls, v: str) -> str:
+        """Reject blank location strings."""
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("location must not be empty")
+        return stripped
+
+    @field_validator("sqft")
+    @classmethod
+    def sqft_positive(cls, v: float) -> float:
+        """Reject non-positive sqft values."""
+        if v <= 0:
+            raise ValueError("sqft must be greater than 0")
+        return v
 
 
-    with open(MODEL_PATH, "rb") as f:
-        model = pickle.load(f)
+class PredictResponse(BaseModel):
+    """Output schema for /api/predict."""
+
+    predicted_price: float
+    currency: str = "Lakhs"
+    confidence_range: list[float]
 
 
-    print("Model artifacts loaded successfully!")
+class HealthResponse(BaseModel):
+    """Output schema for /api/health."""
 
-    return True
-
-
-
-
-@app.on_event("startup")
-def startup_event():
-
-    load_saved_artifacts()
+    status: str
+    model_version: str
+    dataset_size: int
+    r2_score: float
 
 
-    if not os.path.exists(LISTINGS_PATH):
+class MetricsResponse(BaseModel):
+    """Output schema for /api/metrics."""
 
-        with open(LISTINGS_PATH, "w") as f:
-            json.dump([], f)
+    total_predictions: int
+    avg_response_ms: float
+    errors: int
 
 
-@app.get("/metrics")
-def metrics():
+# ---------------------------------------------------------------------------
+# Endpoints
+# ---------------------------------------------------------------------------
 
-    return Response(
-        generate_latest(),
-        media_type=CONTENT_TYPE_LATEST
+
+@app.get("/api/health", response_model=HealthResponse, tags=["Monitoring"])
+def health() -> HealthResponse:
+    """Return server health and model metadata.
+
+    Used as the Kubernetes readiness probe target.
+    """
+    m = _state["metrics"]
+    return HealthResponse(
+        status="healthy" if _state["model"] is not None else "model_not_loaded",
+        model_version=m.get("model", "unknown"),
+        dataset_size=int(m.get("dataset_size", 0)),
+        r2_score=float(m.get("r2", 0.0)),
     )
 
 
+@app.get("/api/locations", tags=["Data"])
+def get_locations() -> dict[str, list[str]]:
+    """Return sorted list of valid location names from the trained encoder."""
+    encoder: dict[str, float] | None = _state["location_encoder"]
+    if encoder is None:
+        raise HTTPException(status_code=503, detail="Model artefacts not loaded.")
 
-@app.get("/health")
-def health():
-
-    return {
-        "status": "healthy",
-        "model_loaded": model is not None
-    }
-
-
-
-class PredictionRequest(BaseModel):
-
-    location: str
-    total_sqft: float
-    bhk: int
-    bath: int
+    # Exclude 'other' from the user-facing list (it is used as an internal fallback)
+    locations = sorted(loc for loc in encoder.keys() if loc != "other")
+    return {"locations": locations}
 
 
+@app.post("/api/predict", response_model=PredictResponse, tags=["Prediction"])
+def predict(req: PredictRequest, request: Request) -> PredictResponse:
+    """Predict the Bengaluru home price in Lakhs.
 
-class PredictionResponse(BaseModel):
+    Input validation is handled by Pydantic.  If location is unknown it is
+    mapped to the 'other' bucket — this is intentional and not an error.
+    Returns a ±8 % confidence band around the point estimate.
+    """
+    t0 = time.perf_counter()
+    model = _state["model"]
+    encoder: dict[str, float] | None = _state["location_encoder"]
 
-    predicted_price_lakhs: float
-    price_per_sqft: float
-    price_range_min: float
-    price_range_max: float
+    if model is None or encoder is None:
+        _state["total_errors"] += 1
+        raise HTTPException(status_code=503, detail="Model artefacts not loaded.")
 
-    success: bool
-    message: str
+    location_key = req.location.strip().lower()
 
+    # Validate that the location is known or falls back to 'other'
+    if location_key not in encoder and "other" not in encoder:
+        _state["total_errors"] += 1
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Unknown location '{req.location}'. "
+                "Call GET /api/locations for valid options."
+            ),
+        )
 
+    loc_freq = encoder.get(location_key, encoder.get("other", 0.0))
 
-class HomeListing(BaseModel):
-
-    id: Optional[str] = None
-
-    title: str
-    location: str
-
-    bhk: int
-    bath: int
-
-    total_sqft: float
-    balcony: int
-
-    asking_price_lakhs: float
-    predicted_price_lakhs: float
-
-    seller_name: str
-    seller_phone: str
-
-    created_at: Optional[str] = None
-
-
-
-@app.get("/")
-def home():
-
-    return {
-
-        "status": "online",
-
-        "message":
-        "Bengaluru House Price Prediction Server is active",
-
-        "artifacts_loaded":
-        model is not None
-
-    }
-
-
-
-@app.get("/get_location_names")
-def get_location_names():
-
-    global data_columns
-
-
-    if not data_columns:
-
-        load_saved_artifacts()
-
-
-
-    if not data_columns:
-
-        return {
-
-            "locations":
-            [
-                "whitefield",
-                "hsr layout",
-                "indiranagar",
-                "sarjapur road",
-                "other"
-            ]
-
-        }
-
-
-
-    locations = data_columns[3:]
-
-
-    locations = [
-        loc.title()
-        for loc in locations
-    ]
-
-
-    locations.append("Other")
-
-
-    return {
-
-        "locations": locations
-
-    }
-
-
-
-
-
-@app.post(
-    "/predict_home_price",
-    response_model=PredictionResponse
-)
-def predict_home_price(
-        req: PredictionRequest
-):
-
-    start_time = time.time()
-
-    REQUEST_COUNT.inc()
-
+    features = np.array([[req.sqft, req.bhk, req.bath, loc_freq]])
 
     try:
-
-        global model, data_columns
-
-
-
-        if model is None:
-
-            success = load_saved_artifacts()
-
-            if not success:
-
-                raise HTTPException(
-
-                    status_code=503,
-
-                    detail=
-                    "Prediction model unavailable"
-
-                )
-
-
-
-        location = req.location.lower().strip()
-
-
-
-        loc_index = -1
-
-
-        if location in data_columns:
-
-            loc_index = data_columns.index(location)
-
-
-
-        x = np.zeros(len(data_columns))
-
-
-        x[0] = req.total_sqft
-        x[1] = req.bhk
-        x[2] = req.bath
-
-
-
-        if loc_index >= 0:
-
-            x[loc_index] = 1
-
-
-
-        prediction = float(
-            model.predict([x])[0]
-        )
-
-
-
-        if prediction <= 0:
-
-            prediction = (
-
-                req.total_sqft * 0.045
-
-                +
-                req.bhk * 3.5
-
-                +
-                req.bath * 2
-
-            )
-
-
-
-        price_sqft = (
-
-            prediction * 100000
-
-        ) / req.total_sqft
-
-
-
-        min_price = max(
-
-            prediction * 0.9,
-
-            req.total_sqft * 0.03
-
-        )
-
-
-        max_price = prediction * 1.1
-
-
-
-
-        LATENCY.observe(
-            time.time() - start_time
-        )
-
-
-        return PredictionResponse(
-
-            predicted_price_lakhs=
-            round(prediction,2),
-
-            price_per_sqft=
-            round(price_sqft,2),
-
-            price_range_min=
-            round(min_price,2),
-
-            price_range_max=
-            round(max_price,2),
-
-            success=True,
-
-            message=
-            "Prediction generated successfully"
-
-        )
-
-
-
-    except Exception as e:
-
-
-        ERROR_COUNT.inc()
-
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail=f"Prediction error: {str(e)}"
-
-        )
-
-@app.get(
-    "/listings",
-    response_model=List[HomeListing]
-)
-def get_listings():
-
-
-    if not os.path.exists(LISTINGS_PATH):
-
-        return []
-
-
-
-    try:
-
-        with open(LISTINGS_PATH,"r") as f:
-
-            return json.load(f)
-
-
-
-    except Exception as e:
-
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail=str(e)
-
-        )
-
-
-
-
-
-
-@app.post("/list_home")
-def list_home(
-        listing: HomeListing
-):
-
-
-    try:
-
-
-        if not os.path.exists(LISTINGS_PATH):
-
-            with open(LISTINGS_PATH,"w") as f:
-
-                json.dump([],f)
-
-
-
-        with open(LISTINGS_PATH,"r") as f:
-
-            listings=json.load(f)
-
-
-
-        data = listing.dict()
-
-
-        data["id"] = str(uuid.uuid4())
-
-
-        data["created_at"] = (
-            datetime.now()
-            .strftime("%Y-%m-%d %H:%M:%S")
-        )
-
-
-
-        listings.append(data)
-
-
-
-        with open(LISTINGS_PATH,"w") as f:
-
-            json.dump(
-                listings,
-                f,
-                indent=4
-            )
-
-
-
-        return {
-
-            "success":True,
-
-            "message":
-            "Home listed successfully!",
-
-            "listing_id":
-            data["id"]
-
-        }
-
-    except Exception as e:
-
-
-        raise HTTPException(
-
-            status_code=500,
-
-            detail=str(e)
-
-        )
+        raw_pred = float(model.predict(features)[0])
+    except Exception as exc:
+        _state["total_errors"] += 1
+        log.error("Model inference failed: %s", exc)
+        raise HTTPException(status_code=500, detail=f"Model inference error: {exc}")
+
+    # Clamp to a floor of 1 Lakh (model can't legitimately go below zero)
+    predicted = max(round(raw_pred, 2), 1.0)
+    confidence_range = [round(predicted * 0.92, 2), round(predicted * 1.08, 2)]
+
+    latency_ms = (time.perf_counter() - t0) * 1000
+    _state["total_predictions"] += 1
+    _state["total_latency_ms"] += latency_ms
+
+    log.info(
+        "PREDICT | location=%s sqft=%.0f bhk=%d bath=%d → %.2f L  (%.1f ms)",
+        req.location,
+        req.sqft,
+        req.bhk,
+        req.bath,
+        predicted,
+        latency_ms,
+    )
+
+    return PredictResponse(
+        predicted_price=predicted,
+        currency="Lakhs",
+        confidence_range=confidence_range,
+    )
+
+
+@app.get("/api/metrics", response_model=MetricsResponse, tags=["Monitoring"])
+def api_metrics() -> MetricsResponse:
+    """Return cumulative runtime metrics since server start."""
+    total = _state["total_predictions"]
+    avg_ms = (
+        _state["total_latency_ms"] / total if total > 0 else 0.0
+    )
+    return MetricsResponse(
+        total_predictions=total,
+        avg_response_ms=round(avg_ms, 2),
+        errors=_state["total_errors"],
+    )
+
+
+@app.get("/", tags=["Root"])
+def root() -> dict[str, str]:
+    """Root health ping."""
+    return {
+        "service": "Bengaluru Home Price Prediction API",
+        "version": "2.0.0",
+        "docs": "/docs",
+    }

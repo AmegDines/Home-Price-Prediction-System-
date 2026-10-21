@@ -1,61 +1,100 @@
-import { modelData } from "@/data/model_data";
+/**
+ * predictor.ts — API client for the home price prediction service.
+ *
+ * All prediction logic runs server-side. This module only handles
+ * HTTP communication with POST /api/predict and related endpoints.
+ * There are NO embedded model coefficients or fallback maths here.
+ */
+
+const API_BASE =
+  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface PredictRequest {
+  location: string;
+  sqft: number;
+  bhk: number;
+  bath: number;
+}
 
 export interface PredictionResult {
-  predictedPriceLakhs: number;
-  pricePerSqft: number;
-  priceRangeMin: number;
-  priceRangeMax: number;
-  isFallback: boolean;
+  predicted_price: number;
+  currency: string;
+  confidence_range: [number, number];
+}
+
+export interface HealthData {
+  status: string;
+  model_version: string;
+  dataset_size: number;
+  r2_score: number;
+}
+
+export interface ApiError {
+  message: string;
+  detail?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Fetch helpers
+// ---------------------------------------------------------------------------
+
+/**
+ * Call POST /api/predict with the given property features.
+ * Returns a PredictionResult or throws an ApiError.
+ */
+export async function fetchPrediction(
+  req: PredictRequest
+): Promise<PredictionResult> {
+  const res = await fetch(`${API_BASE}/api/predict`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      location: req.location,
+      sqft: req.sqft,
+      bhk: req.bhk,
+      bath: req.bath,
+    }),
+  });
+
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw {
+      message: `Prediction failed (HTTP ${res.status})`,
+      detail: err?.detail ?? "Unknown server error",
+    } satisfies ApiError;
+  }
+
+  return res.json() as Promise<PredictionResult>;
 }
 
 /**
- * Predicts the price of a house in Bengaluru using the client-side trained regression model.
- * Formula: price = intercept + sqft * coef_sqft + bhk * coef_bhk + bath * coef_bath + location_coef
+ * Call GET /api/locations to retrieve the sorted list of valid location names
+ * that the model was trained on.
  */
-export function predictHomePriceClient(
-  location: string,
-  totalSqft: number,
-  bhk: number,
-  bath: number
-): PredictionResult {
-  const { intercept, coef_sqft, coef_bhk, coef_bath, location_coefs } = modelData;
-
-  const locKey = location.toLowerCase().trim();
-  // Find location coefficient or fallback to 'other' or 0
-  const locCoef = location_coefs[locKey] !== undefined ? location_coefs[locKey] : (location_coefs["other"] || 0);
-
-  // Compute prediction
-  let price = intercept + (totalSqft * coef_sqft) + (bhk * coef_bhk) + (bath * coef_bath) + locCoef;
-  let isFallback = false;
-
-  // Boundary Protection: If inputs are extreme or lead to a negative/unrealistic price, apply a professional fallback
-  if (price <= 0 || isNaN(price)) {
-    isFallback = true;
-    // Solid real estate rule of thumb for Bengaluru (avg cost is around 4,500 - 6,500 Rs per sqft based on location class)
-    let baseRate = 0.045; // 4.5k per sqft
-    if (locCoef > 50) {
-      baseRate = 0.095; // Highly premium (Indiranagar, Koramangala)
-    } else if (locCoef > 10) {
-      baseRate = 0.07;  // Premium (HSR, JP Nagar)
-    } else if (locCoef < -30) {
-      baseRate = 0.035; // Budget friendly (Anekal, Bidadi)
-    }
-    
-    price = (totalSqft * baseRate) + (bhk * 4.0) + (bath * 2.5);
+export async function fetchLocations(): Promise<string[]> {
+  const res = await fetch(`${API_BASE}/api/locations`);
+  if (!res.ok) {
+    throw {
+      message: `Failed to load locations (HTTP ${res.status})`,
+    } satisfies ApiError;
   }
+  const data = (await res.json()) as { locations: string[] };
+  return data.locations;
+}
 
-  // Calculate metrics
-  const pricePerSqft = (price * 100000) / totalSqft;
-  
-  // Approximate standard error intervals (+/- 8% for clean estimation)
-  const priceRangeMin = Math.max(price * 0.92, totalSqft * 0.025);
-  const priceRangeMax = price * 1.08;
-
-  return {
-    predictedPriceLakhs: parseFloat(price.toFixed(2)),
-    pricePerSqft: parseFloat(pricePerSqft.toFixed(2)),
-    priceRangeMin: parseFloat(priceRangeMin.toFixed(2)),
-    priceRangeMax: parseFloat(priceRangeMax.toFixed(2)),
-    isFallback
-  };
+/**
+ * Call GET /api/health to retrieve model metadata shown in the UI footer.
+ */
+export async function fetchHealth(): Promise<HealthData> {
+  const res = await fetch(`${API_BASE}/api/health`);
+  if (!res.ok) {
+    throw {
+      message: `Failed to fetch health data (HTTP ${res.status})`,
+    } satisfies ApiError;
+  }
+  return res.json() as Promise<HealthData>;
 }

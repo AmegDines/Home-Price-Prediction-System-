@@ -1,0 +1,67 @@
+# ──────────────────────────────────────────────────────────────────
+# .gitignore — Bengaluru Home Price Prediction System
+# ──────────────────────────────────────────────────────────────────
+
+# ── Secrets & environment ──────────────────────────────────────────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# ── Trained model artefacts (never commit to git) ─────────────────
+*.pkl
+*.pickle
+server/model/
+
+# ── Raw CSV datasets ───────────────────────────────────────────────
+model_training/*.csv
+model_training/data/
+
+# ── Python bytecode & caches ───────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# ── Python virtual environments ────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── Node.js ────────────────────────────────────────────────────────
+node_modules/
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# ── Next.js build cache ────────────────────────────────────────────
+.next/
+
+# ── OS artefacts ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── IDE ────────────────────────────────────────────────────────────
+.idea/
+.vscode/
+*.code-workspace
+
+# ── Docker ─────────────────────────────────────────────────────────
+.dockerignore
+
+# ── Test / coverage reports ────────────────────────────────────────
+htmlcov/
+.coverage
+coverage.xml
+reports/
+
+# ── Jupyter ────────────────────────────────────────────────────────
+.ipynb_checkpoints/
