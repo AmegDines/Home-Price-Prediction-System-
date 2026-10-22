@@ -1,4 +1,4 @@
-import { predictHomePriceClient } from "./predictor";
+import { fetchPrediction } from "./predictor";
 
 export interface HomeListing {
   id: string;
