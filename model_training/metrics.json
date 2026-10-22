@@ -3,7 +3,7 @@
   "r2": 0.598662,
   "mae": 31.7224,
   "rmse": 78.4695,
-  "trained_on": "2026-10-22T08:50:15Z",
+  "trained_on": "2026-10-22T08:54:08Z",
   "dataset_size": 12372,
   "cv_results": {
     "LinearRegression": {
