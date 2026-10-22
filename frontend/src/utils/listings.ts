@@ -105,8 +105,8 @@ export function getStoredListings(): HomeListing[] {
 /**
  * Lists a new property. Runs AI valuation and saves it locally.
  */
-export function addStoredListing(listing: Omit<HomeListing, "id" | "predicted_price_lakhs" | "created_at" | "imageUrl">): HomeListing {
-  const valuation = fetchPrediction(listing.location, listing.total_sqft, listing.bhk, listing.bath);
+export async function addStoredListing(listing: Omit<HomeListing, "id" | "predicted_price_lakhs" | "created_at" | "imageUrl">): HomeListing {
+  const valuation = await fetchPrediction({ location: listing.location, sqft: listing.total_sqft, bhk: listing.bhk, bath: listing.bath });
   
   // Pick a random nice house photo from Unsplash for visual premium feel
   const images = [
