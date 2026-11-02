@@ -1,25 +1,26 @@
 """
 pipeline.py — Bengaluru Home Price ML Pipeline
 ================================================
-Merges all Kaggle CSV datasets found in model_training/,
-cleans and validates data, trains four models with 5-fold CV,
-picks the best by R² and serialises artefacts to server/model/.
+Merges CSV datasets found in model_training/, cleans the rows,
+cross-fits locality priors, evaluates a fixed holdout, and saves
+the full-data model and serving artifacts to server/model/.
 """
 
 import glob
 import json
 import logging
 import os
-import pickle
-from datetime import datetime
+import joblib
+from datetime import datetime, timezone
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import GradientBoostingRegressor
-from sklearn.linear_model import LinearRegression, Ridge
+from sklearn.compose import ColumnTransformer
+from sklearn.ensemble import ExtraTreesRegressor
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
-from sklearn.model_selection import KFold, cross_val_score, train_test_split
-from xgboost import XGBRegressor
+from sklearn.model_selection import KFold, train_test_split
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import OneHotEncoder
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -86,6 +87,7 @@ COLUMN_ALIASES: dict[str, list[str]] = {
 }
 
 TOP_N_LOCATIONS = 100
+MINIMUM_HOLDOUT_R2 = 0.75
 
 
 # ---------------------------------------------------------------------------
@@ -264,117 +266,131 @@ def clean(df: pd.DataFrame) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# Step 3 — Location frequency encoding (top 100, rest → 'other')
+# Step 3 — Location priors for API inference
 # ---------------------------------------------------------------------------
 
 
 def encode_locations(
     df: pd.DataFrame,
-) -> tuple[pd.DataFrame, dict[str, str]]:
-    """Frequency-encode location into a single numeric column.
-
-    Also returns a mapping {original_name → canonical_name} for the encoder.
-    Top-N locations keep their name; the rest are collapsed to 'other'.
-    The encoder dict maps each valid location to itself (or 'other').
-    """
-    counts = df["location"].value_counts()
-    top_locations: list[str] = counts.nlargest(TOP_N_LOCATIONS).index.tolist()
-
-    encoder: dict[str, str] = {loc: loc for loc in top_locations}
-    # everything else maps to 'other'
-
-    df["location_canonical"] = df["location"].apply(
-        lambda x: x if x in encoder else "other"
+) -> tuple[pd.DataFrame, dict[str, dict[str, float]]]:
+    """Return rows and a compact map of locality median price priors."""
+    with_pps = df.assign(price_per_sqft=df["price"] * 100_000 / df["sqft"])
+    grouped = with_pps.groupby("location").agg(
+        median_price=("price", "median"),
+        median_price_per_sqft=("price_per_sqft", "median"),
     )
-
-    # Build frequency map on canonical names
-    freq = df["location_canonical"].value_counts(normalize=True).to_dict()
-    df["location_freq"] = df["location_canonical"].map(freq)
-
-    # Save encoder: canonical_name → frequency (used at inference time)
-    location_encoder: dict[str, float] = {
-        loc: freq.get(loc, 0.0) for loc in sorted(top_locations)
+    top_locations = df["location"].value_counts().nlargest(TOP_N_LOCATIONS).index
+    encoder = {
+        str(loc): {
+            "median_price": float(grouped.loc[loc, "median_price"]),
+            "median_price_per_sqft": float(grouped.loc[loc, "median_price_per_sqft"]),
+        }
+        for loc in top_locations
     }
-    # Add 'other' sentinel
-    location_encoder["other"] = freq.get("other", 0.0)
+    encoder["other"] = {
+        "median_price": float(df["price"].median()),
+        "median_price_per_sqft": float(with_pps["price_per_sqft"].median()),
+    }
+    return df.copy(), encoder
 
-    return df, location_encoder
+
+def _location_priors(df: pd.DataFrame) -> dict[str, dict[str, float]]:
+    """Calculate locality medians using only the supplied training rows."""
+    with_pps = df.assign(price_per_sqft=df["price"] * 100_000 / df["sqft"])
+    grouped = with_pps.groupby("location").agg(
+        median_price=("price", "median"),
+        median_price_per_sqft=("price_per_sqft", "median"),
+    )
+    priors = {
+        str(loc): {
+            "median_price": float(row["median_price"]),
+            "median_price_per_sqft": float(row["median_price_per_sqft"]),
+        }
+        for loc, row in grouped.iterrows()
+    }
+    priors["other"] = {
+        "median_price": float(df["price"].median()),
+        "median_price_per_sqft": float(with_pps["price_per_sqft"].median()),
+    }
+    return priors
+
+
+def make_features(rows: pd.DataFrame, priors: dict) -> pd.DataFrame:
+    """Construct the shared training and serving feature frame."""
+    fallback = priors["other"]
+    features = rows[["location", "sqft", "bhk", "bath"]].copy()
+    stats = [priors.get(str(loc), fallback) for loc in features["location"]]
+    features["median_location_price"] = [s["median_price"] for s in stats]
+    features["median_location_price_per_sqft"] = [
+        s["median_price_per_sqft"] for s in stats
+    ]
+    features["sqft_per_bhk"] = features["sqft"] / features["bhk"]
+    return features
+
+
+def _new_model() -> Pipeline:
+    numeric = [
+        "sqft", "bhk", "bath", "median_location_price",
+        "median_location_price_per_sqft", "sqft_per_bhk",
+    ]
+    preprocess = ColumnTransformer([
+        ("location", OneHotEncoder(handle_unknown="ignore", min_frequency=5), ["location"]),
+        ("numeric", "passthrough", numeric),
+    ])
+    return Pipeline([
+        ("features", preprocess),
+        ("regressor", ExtraTreesRegressor(
+            n_estimators=100, min_samples_leaf=2, max_features=1.0,
+            n_jobs=-1, random_state=42,
+        )),
+    ])
 
 
 # ---------------------------------------------------------------------------
-# Step 4 — Train & compare models
+# Step 4 — Train and evaluate the selected model
 # ---------------------------------------------------------------------------
-
-
-MODELS: dict = {
-    "LinearRegression": LinearRegression(),
-    "Ridge": Ridge(alpha=1.0),
-    "GradientBoostingRegressor": GradientBoostingRegressor(
-        n_estimators=200, learning_rate=0.1, max_depth=4, random_state=42
-    ),
-    "XGBRegressor": XGBRegressor(
-        n_estimators=300,
-        learning_rate=0.05,
-        max_depth=5,
-        subsample=0.8,
-        colsample_bytree=0.8,
-        random_state=42,
-        verbosity=0,
-    ),
-}
-
 
 def train_and_select(
     df: pd.DataFrame,
 ) -> tuple[object, str, dict, pd.DataFrame, pd.Series]:
-    """Train all MODELS with 5-fold CV, select the best by R², return it.
+    """Fit ExtraTrees with cross-fitted locality priors; keep a fixed holdout."""
+    train, test = train_test_split(df, test_size=0.2, random_state=42)
+    y_train, y_test = train["price"], test["price"]
 
-    Returns: (best_model, best_name, cv_results, X_test, y_test)
-    """
-    X = df[["sqft", "bhk", "bath", "location_freq"]]
-    y = df["price"]
+    # Cross-fit target-derived locality priors so a row never contributes to
+    # the locality statistics used to predict itself during model fitting.
+    train_features = pd.DataFrame(index=train.index)
+    folds = KFold(n_splits=5, shuffle=True, random_state=42)
+    for fit_idx, fold_idx in folds.split(train):
+        fit_rows, fold_rows = train.iloc[fit_idx], train.iloc[fold_idx]
+        fold_features = make_features(fold_rows, _location_priors(fit_rows))
+        train_features.loc[fold_rows.index, fold_features.columns] = fold_features
 
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+    test_features = make_features(test, _location_priors(train))
+    model = _new_model()
+    log.info("Training ExtraTreesRegressor with cross-fitted locality features …")
+    model.fit(train_features, y_train)
+    predictions = model.predict(test_features)
+    result = {
+        "test_r2": float(r2_score(y_test, predictions)),
+        "test_mae": float(mean_absolute_error(y_test, predictions)),
+        "test_rmse": float(np.sqrt(mean_squared_error(y_test, predictions))),
+    }
+    log.info(
+        "ExtraTreesRegressor → held-out R²: %.4f | MAE: %.2f | RMSE: %.2f",
+        result["test_r2"], result["test_mae"], result["test_rmse"],
     )
 
-    kf = KFold(n_splits=5, shuffle=True, random_state=42)
-    cv_results: dict[str, dict] = {}
-
-    for name, model in MODELS.items():
-        log.info("Training %s …", name)
-        cv_scores = cross_val_score(
-            model, X_train, y_train, cv=kf, scoring="r2", n_jobs=-1
-        )
-        model.fit(X_train, y_train)
-        preds = model.predict(X_test)
-        r2 = r2_score(y_test, preds)
-        mae = mean_absolute_error(y_test, preds)
-        rmse = float(np.sqrt(mean_squared_error(y_test, preds)))
-
-        cv_results[name] = {
-            "cv_r2_mean": float(cv_scores.mean()),
-            "cv_r2_std": float(cv_scores.std()),
-            "test_r2": float(r2),
-            "test_mae": float(mae),
-            "test_rmse": float(rmse),
-        }
-        log.info(
-            "  %s → CV R²: %.4f ± %.4f | Test R²: %.4f",
-            name,
-            cv_scores.mean(),
-            cv_scores.std(),
-            r2,
-        )
-
-    best_name = max(cv_results, key=lambda n: cv_results[n]["test_r2"])
-    log.info("Best model: %s (Test R²=%.4f)", best_name, cv_results[best_name]["test_r2"])
-
-    # Re-fit best model on full training set
-    best_model = MODELS[best_name]
-    best_model.fit(X_train, y_train)
-
-    return best_model, best_name, cv_results, X_test, y_test
+    # After measuring the untouched holdout, refit the deployable model on all
+    # available rows. Cross-fitting still keeps each row's priors independent.
+    full_features = pd.DataFrame(index=df.index)
+    for fit_idx, fold_idx in folds.split(df):
+        fit_rows, fold_rows = df.iloc[fit_idx], df.iloc[fold_idx]
+        fold_features = make_features(fold_rows, _location_priors(fit_rows))
+        full_features.loc[fold_rows.index, fold_features.columns] = fold_features
+    final_model = _new_model()
+    final_model.fit(full_features, df["price"])
+    return final_model, "ExtraTreesRegressor", {"ExtraTreesRegressor": result}, test_features, y_test
 
 
 # ---------------------------------------------------------------------------
@@ -385,7 +401,7 @@ def train_and_select(
 def save_artefacts(
     model: object,
     model_name: str,
-    location_encoder: dict[str, float],
+    location_encoder: dict[str, dict[str, float]],
     cv_results: dict,
     X_test: pd.DataFrame,
     y_test: pd.Series,
@@ -395,26 +411,27 @@ def save_artefacts(
     model_path = os.path.join(SERVER_MODEL_DIR, "home_price_model.pkl")
     encoder_path = os.path.join(SERVER_MODEL_DIR, "location_encoder.pkl")
 
-    with open(model_path, "wb") as fh:
-        pickle.dump(model, fh)
+    joblib.dump(model, model_path, compress=3)
     log.info("Model saved → %s", model_path)
 
-    with open(encoder_path, "wb") as fh:
-        pickle.dump(location_encoder, fh)
+    joblib.dump(location_encoder, encoder_path, compress=3)
     log.info("Encoder saved → %s", encoder_path)
 
-    # Compute final test metrics
-    preds = model.predict(X_test)
+    # Persist the untouched holdout results computed before the full-data refit.
+    holdout = cv_results[model_name]
     metrics = {
         "model": model_name,
-        "r2": round(r2_score(y_test, preds), 6),
-        "mae": round(mean_absolute_error(y_test, preds), 4),
-        "rmse": round(float(np.sqrt(mean_squared_error(y_test, preds))), 4),
-        "trained_on": datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "r2": round(holdout["test_r2"], 6),
+        "mae": round(holdout["test_mae"], 4),
+        "rmse": round(holdout["test_rmse"], 4),
+        "trained_on": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "dataset_size": dataset_size,
-        "cv_results": cv_results,
+        "holdout": holdout,
     }
     with open(METRICS_JSON, "w") as fh:
+        json.dump(metrics, fh, indent=2)
+    # Package the same metrics beside the model so the API image is self-contained.
+    with open(os.path.join(SERVER_MODEL_DIR, "metrics.json"), "w") as fh:
         json.dump(metrics, fh, indent=2)
     log.info("Metrics saved → %s", METRICS_JSON)
     log.info(
@@ -444,6 +461,13 @@ def run_pipeline() -> None:
     df_encoded, location_encoder = encode_locations(df_clean)
 
     best_model, best_name, cv_results, X_test, y_test = train_and_select(df_encoded)
+
+    holdout_r2 = cv_results[best_name]["test_r2"]
+    if holdout_r2 < MINIMUM_HOLDOUT_R2:
+        raise RuntimeError(
+            f"Holdout R² {holdout_r2:.4f} is below the required "
+            f"{MINIMUM_HOLDOUT_R2:.2f}; refusing to publish model artifacts."
+        )
 
     save_artefacts(
         model=best_model,

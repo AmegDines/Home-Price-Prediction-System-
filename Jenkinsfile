@@ -22,8 +22,8 @@ pipeline {
                 sh '''
                     ${PYTHON} -m pip install --quiet --upgrade pip
                     ${PYTHON} -m pip install --quiet \
-                        pandas numpy scikit-learn xgboost \
-                        fastapi uvicorn pydantic pytest httpx
+                        -r server/requirements.txt pytest httpx
+                    mkdir -p reports
                 '''
                 dir('frontend') {
                     sh 'npm ci --prefer-offline'

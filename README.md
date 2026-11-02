@@ -1,18 +1,26 @@
-Bengaluru Nest AI: Home Price Predictor & Seller Marketplace
+# Bengaluru Nest AI
 
-A premium, high-fidelity real estate web application designed specifically for Bengaluru. The platform features an AI-powered home price valuation engine, a seller portal to list properties with real-time AI valuation guidance, and an interactive properties search board.
+A Bengaluru home price estimation and seller listing app. The API loads a trained model from `server/model/`; the frontend calls the API for estimates. Listings created in the browser are saved in that browser's local storage.
 
+## Build and run locally
 
-Key Features
-1. **AI Price Predictor**: Estimates the price of a property in Bengaluru in Lakhs/Crores based on Location, Area (sqft), BHK size, and Bathroom count, trained on 7,400+ verified transaction records.
-2. **Seller Hub ("List Your Home")**: Homeowners can list their properties. As they type, the system provides **real-time AI market valuations** and compares it to their custom asking price to label listings ("Below AI Value", "Fair Market Value", etc.).
-3. **Interactive Listings Board**: Displays listed homes in real-time with comprehensive filters for location, BHK size, and budget ranges, persisted via local storage or backend service.
-4. **Professional Light Theme Design System**: Built with modern, glassmorphic UI cards, responsive grids, sleek range sliders, and custom location selectors.
+1. Put one or more supported Bengaluru housing CSV files in `model_training/`. The pipeline searches that directory for CSV files; raw datasets are intentionally excluded from Git.
+2. Install the Python dependencies from `server/requirements.txt`; install `pytest` if you want to run the checks.
+3. Run `python model_training/pipeline.py`. This writes the model, location encoder, and metrics to `server/model/`, and a training metrics copy to `model_training/metrics.json`.
+4. Run `docker compose up --build`. The backend image build checks for all three packaged artifacts and fails clearly if training was skipped.
+5. Open `http://localhost:3000`; the API is available at `http://localhost:8000/docs`.
 
+## Kubernetes deployment
 
+The CI pipeline trains the model before building the backend image. The image contains the trained model, location encoder, and metrics under `/app/model`; the Deployment uses those image contents directly, so no manually populated model volume is needed. Keep the training, image build, and deployment stages in that order when changing the pipeline.
 
-Tech Stack & Language Selection
-* **Data Science & ML (Python)**: `pandas`, `numpy`, `scikit-learn` used for loading the Kaggle dataset, cleaning nulls/ranges, filtering outliers (bathroom discrepancies, BHK pricing anomalies, sqft per room sizes), and fitting a highly optimized `LinearRegression` model.
-* **Backend API (Python - FastAPI)**: High-performance endpoint services, enabling CORS and automatic OpenAPI documentation.
-* **Frontend Web App (TypeScript / Next.js)**: Optimized using App Router, modern CSS Modules, searchable location select triggers, and fully interactive layouts.
-* **Mathematical JS Predictor Engine**: An embedded browser-based engine executing the trained coefficients. Serves as a static-site prediction fallback, allowing zero-cost deployments!
+## Project layout
+
+- `frontend/`: Next.js app and browser-local seller listings
+- `server/`: FastAPI prediction service and Docker image
+- `model_training/`: CSV cleaning, model selection, and artifact generation
+- `k8s/`: Kubernetes Deployments, Services, and autoscaling configuration
+
+## Model evaluation
+
+The current ExtraTrees model uses one-hot locality categories, area and room features, and locality median price and price-per-square-foot priors. Those priors are cross-fitted while training so each row is excluded from the statistics used to predict it. The pipeline reports a fixed 20% holdout score and refuses to write model artifacts when holdout R² is below 0.75. The current dataset run reports R² 0.8005, MAE 23.6960 lakhs, and RMSE 55.3272 lakhs. Metrics are saved in `model_training/metrics.json`.

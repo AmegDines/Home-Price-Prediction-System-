@@ -82,24 +82,18 @@ def test_no_bathroom_outliers(cleaned_df: pd.DataFrame) -> None:
     )
 
 
-def test_no_price_per_sqft_extreme_outliers(cleaned_df: pd.DataFrame) -> None:
-    """No location should have price_per_sqft rows beyond mean ± 3σ."""
-    df = cleaned_df.copy()
-    df["price_per_sqft"] = df["price"] * 100_000 / df["sqft"]
-    for loc, sub in df.groupby("location"):
-        if len(sub) < 4:
-            continue  # can't compute meaningful std with too few rows
-        mu = sub["price_per_sqft"].mean()
-        sigma = sub["price_per_sqft"].std()
-        if sigma == 0 or np.isnan(sigma):
-            continue
-        beyond = sub[
-            (sub["price_per_sqft"] < mu - 3 * sigma)
-            | (sub["price_per_sqft"] > mu + 3 * sigma)
-        ]
-        assert len(beyond) == 0, (
-            f"Location '{loc}' has {len(beyond)} price_per_sqft outliers beyond ±3σ."
-        )
+def test_price_per_sqft_filter_removes_extreme_rows() -> None:
+    """The one-pass locality filter removes an extreme synthetic observation."""
+    values = [4800 + (i % 7) * 80 for i in range(30)] + [21000]
+    frame = pd.DataFrame({
+        "location": ["sample"] * len(values),
+        "sqft": [1000.0] * len(values),
+        "bhk": [2] * len(values),
+        "bath": [2] * len(values),
+        "price": [v * 1000 / 100000 for v in values],
+    })
+    cleaned = pl.clean(frame)
+    assert len(cleaned) == len(frame) - 1
 
 
 # ---------------------------------------------------------------------------
@@ -109,20 +103,9 @@ def test_no_price_per_sqft_extreme_outliers(cleaned_df: pd.DataFrame) -> None:
 
 def test_model_r2_above_threshold(encoded_df) -> None:
     """Best selected model must achieve R² > 0.75 on the 20% test set."""
-    from sklearn.metrics import r2_score
-    from sklearn.model_selection import train_test_split
-
-    df, encoder = encoded_df
-    X = df[["sqft", "bhk", "bath", "location_freq"]]
-    y = df["price"]
-
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
-    )
-
-    _best_model, _best_name, _cv, X_te, y_te = pl.train_and_select(df)
-    preds = _best_model.predict(X_te)
-    r2 = r2_score(y_te, preds)
+    df, _encoder = encoded_df
+    _best_model, best_name, cv, _X_te, _y_te = pl.train_and_select(df)
+    r2 = cv[best_name]["test_r2"]
 
     assert r2 > 0.75, (
         f"Best model R² = {r2:.4f} is below the required threshold of 0.75."

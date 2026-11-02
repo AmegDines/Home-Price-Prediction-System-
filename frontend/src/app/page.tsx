@@ -48,10 +48,12 @@ export default function Home() {
   const [sellerPrice, setSellerPrice] = useState(80);
   const [sellerName, setSellerName] = useState("");
   const [sellerPhone, setSellerPhone] = useState("");
+  const [sellerError, setSellerError] = useState<string | null>(null);
   const [listingSuccess, setListingSuccess] = useState(false);
   const [sellerValuation, setSellerValuation] =
     useState<PredictionResult | null>(null);
   const [sellerLoading, setSellerLoading] = useState(false);
+  const [sellerSubmitting, setSellerSubmitting] = useState(false);
 
   // ── Listings state ────────────────────────────────────────────────────────
   const [listings, setListings] = useState<HomeListing[]>([]);
@@ -124,7 +126,7 @@ export default function Home() {
   const handleEstimatePrice = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!predictorLoc) {
-      alert("Please select a location first.");
+      setPredictionError("Please select a location first.");
       return;
     }
     setLoading(true);
@@ -149,42 +151,37 @@ export default function Home() {
   };
 
   // ── Seller submit ─────────────────────────────────────────────────────────
-  const handleListHome = (e: React.FormEvent) => {
+  const handleListHome = async (e: React.FormEvent) => {
     e.preventDefault();
+    setSellerError(null);
     if (!sellerLoc) {
-      alert("Please select a location.");
+      setSellerError("Please select a location.");
       return;
     }
-    if (!sellerTitle || !sellerName || !sellerPhone) {
-      alert("Please fill in all details.");
+    if (!sellerTitle.trim() || !sellerName.trim() || !sellerPhone.trim()) {
+      setSellerError("Please complete the property title and seller contact details.");
       return;
     }
-    addStoredListing({
-      title: sellerTitle,
-      location: sellerLoc,
-      bhk: sellerBhk,
-      bath: sellerBath,
-      total_sqft: sellerSqft,
-      balcony: sellerBalcony,
-      asking_price_lakhs: sellerPrice,
-      seller_name: sellerName,
-      seller_phone: sellerPhone,
-    });
-    setListings(getStoredListings());
-    setListingSuccess(true);
-    setSellerTitle("");
-    setSellerLoc("");
-    setSellerSqft(1200);
-    setSellerBhk(2);
-    setSellerBath(2);
-    setSellerBalcony(1);
-    setSellerPrice(80);
-    setSellerName("");
-    setSellerPhone("");
-    setTimeout(() => setListingSuccess(false), 5000);
-    setTimeout(() => {
-      document.getElementById("listings")?.scrollIntoView({ behavior: "smooth" });
-    }, 600);
+    setSellerSubmitting(true);
+    try {
+      await addStoredListing({
+        title: sellerTitle.trim(), location: sellerLoc, bhk: sellerBhk,
+        bath: sellerBath, total_sqft: sellerSqft, balcony: sellerBalcony,
+        asking_price_lakhs: sellerPrice, seller_name: sellerName.trim(),
+        seller_phone: sellerPhone.trim(),
+      });
+      setListings(getStoredListings());
+      setListingSuccess(true);
+      setSellerTitle(""); setSellerLoc(""); setSellerSqft(1200);
+      setSellerBhk(2); setSellerBath(2); setSellerBalcony(1);
+      setSellerPrice(80); setSellerName(""); setSellerPhone("");
+      setTimeout(() => setListingSuccess(false), 5000);
+      setTimeout(() => document.getElementById("listings")?.scrollIntoView({ behavior: "smooth" }), 600);
+    } catch (err) {
+      setSellerError(err instanceof Error ? err.message : "Could not publish your listing. Please try again.");
+    } finally {
+      setSellerSubmitting(false);
+    }
   };
 
   const fmt = (lakhs: number) =>
@@ -269,7 +266,7 @@ export default function Home() {
                 : "—"}
             </span>
             <span className={styles.statLabel}>
-              Model Accuracy (R²){" "}
+              Model Score (R²){" "}
               {healthData?.model_version
                 ? `· ${healthData.model_version}`
                 : ""}
@@ -649,6 +646,7 @@ export default function Home() {
           /* ─ SELLER PORTAL ─ */
           <div className={styles.gridSplitter} id="sell-home">
             <form className={styles.featureCard} onSubmit={handleListHome}>
+              {sellerError && <p role="alert" style={{ color: "#b91c1c", marginBottom: "1rem" }}>{sellerError}</p>}
               <div className={styles.cardHeader}>
                 <div
                   className={styles.cardIconWrap}
@@ -846,6 +844,7 @@ export default function Home() {
               <button
                 type="submit"
                 className={`${styles.actionBtn} ${styles.actionBtnGreen}`}
+                disabled={sellerSubmitting}
               >
                 <svg
                   viewBox="0 0 24 24"
@@ -860,7 +859,7 @@ export default function Home() {
                   <line x1="12" y1="5" x2="12" y2="19"></line>
                   <line x1="5" y1="12" x2="19" y2="12"></line>
                 </svg>
-                List Property Now
+                {sellerSubmitting ? "Publishing listing…" : "List Property Now"}
               </button>
             </form>
 

@@ -1,21 +1,20 @@
 """
 main.py — Bengaluru Home Price Prediction FastAPI Server
 =========================================================
-Loads a trained scikit-learn / XGBoost model and a frequency-encoded
-location map from server/model/ at startup.  All prediction logic lives
-here; there is zero fallback maths or embedded coefficients.
+Loads the trained scikit-learn pipeline and locality price priors from
+server/model/ at startup. All prediction logic runs server-side.
 """
 
 import json
 import logging
 import os
-import pickle
 import time
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
 
-import numpy as np
+import joblib
+import pandas as pd
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -33,17 +32,17 @@ log = logging.getLogger(__name__)
 # Paths
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-MODEL_DIR = os.path.join(BASE_DIR, "model")
+MODEL_DIR = os.environ.get("MODEL_DIR", os.path.join(BASE_DIR, "model"))
 MODEL_PATH = os.path.join(MODEL_DIR, "home_price_model.pkl")
 ENCODER_PATH = os.path.join(MODEL_DIR, "location_encoder.pkl")
-METRICS_PATH = os.path.join(BASE_DIR, "..", "model_training", "metrics.json")
+METRICS_PATH = os.path.join(MODEL_DIR, "metrics.json")
 
 # ---------------------------------------------------------------------------
 # Application state (populated at startup)
 # ---------------------------------------------------------------------------
 _state: dict[str, Any] = {
     "model": None,
-    # location_encoder: dict[str, float]  name → frequency score
+    # location_encoder: name → training-derived location price statistics
     "location_encoder": None,
     "metrics": {},
     "total_predictions": 0,
@@ -81,12 +80,10 @@ def _load_artefacts() -> None:
             "Run model_training/train.py first."
         )
 
-    with open(MODEL_PATH, "rb") as fh:
-        _state["model"] = pickle.load(fh)
+    _state["model"] = joblib.load(MODEL_PATH)
     log.info("Model loaded from %s", MODEL_PATH)
 
-    with open(ENCODER_PATH, "rb") as fh:
-        _state["location_encoder"] = pickle.load(fh)
+    _state["location_encoder"] = joblib.load(ENCODER_PATH)
     log.info(
         "Location encoder loaded (%d locations)", len(_state["location_encoder"])
     )
@@ -220,7 +217,7 @@ def health() -> HealthResponse:
 @app.get("/api/locations", tags=["Data"])
 def get_locations() -> dict[str, list[str]]:
     """Return sorted list of valid location names from the trained encoder."""
-    encoder: dict[str, float] | None = _state["location_encoder"]
+    encoder: dict[str, dict[str, float]] | None = _state["location_encoder"]
     if encoder is None:
         raise HTTPException(status_code=503, detail="Model artefacts not loaded.")
 
@@ -239,7 +236,7 @@ def predict(req: PredictRequest, request: Request) -> PredictResponse:
     """
     t0 = time.perf_counter()
     model = _state["model"]
-    encoder: dict[str, float] | None = _state["location_encoder"]
+    encoder: dict[str, dict[str, float]] | None = _state["location_encoder"]
 
     if model is None or encoder is None:
         _state["total_errors"] += 1
@@ -258,9 +255,16 @@ def predict(req: PredictRequest, request: Request) -> PredictResponse:
             ),
         )
 
-    loc_freq = encoder.get(location_key, encoder.get("other", 0.0))
-
-    features = np.array([[req.sqft, req.bhk, req.bath, loc_freq]])
+    priors = encoder.get(location_key, encoder["other"])
+    features = pd.DataFrame([{
+        "location": location_key,
+        "sqft": req.sqft,
+        "bhk": req.bhk,
+        "bath": req.bath,
+        "median_location_price": priors["median_price"],
+        "median_location_price_per_sqft": priors["median_price_per_sqft"],
+        "sqft_per_bhk": req.sqft / req.bhk,
+    }])
 
     try:
         raw_pred = float(model.predict(features)[0])

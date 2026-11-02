@@ -35,14 +35,14 @@ def client():
     mock_model.predict.return_value = [75.0]
 
     mock_encoder = {
-        "whitefield": 0.08,
-        "hsr layout": 0.07,
-        "indiranagar": 0.05,
-        "other": 0.01,
+        "whitefield": {"median_price": 90.0, "median_price_per_sqft": 7500.0},
+        "hsr layout": {"median_price": 100.0, "median_price_per_sqft": 8000.0},
+        "indiranagar": {"median_price": 180.0, "median_price_per_sqft": 12000.0},
+        "other": {"median_price": 80.0, "median_price_per_sqft": 6500.0},
     }
 
     mock_metrics = {
-        "model": "XGBRegressor",
+        "model": "ExtraTreesRegressor",
         "r2": 0.89,
         "mae": 12.4,
         "rmse": 18.7,
@@ -184,7 +184,7 @@ def test_health_returns_model_metadata(client) -> None:
     assert response.status_code == 200
     body = response.json()
     assert body["status"] == "healthy"
-    assert body["model_version"] == "XGBRegressor"
+    assert body["model_version"] == "ExtraTreesRegressor"
     assert body["dataset_size"] == 12000
     assert body["r2_score"] == pytest.approx(0.89)
 

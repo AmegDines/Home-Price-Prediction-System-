@@ -51,9 +51,13 @@ export default function CustomDropdown({
     <div className={styles.dropdownContainer} ref={dropdownRef}>
       <label className={styles.dropdownLabel}>Bengaluru Location</label>
       
-      <div 
+      <button
+        type="button"
         className={`${styles.dropdownTrigger} ${isOpen ? styles.active : ""}`}
         onClick={() => setIsOpen(!isOpen)}
+        aria-haspopup="listbox"
+        aria-expanded={isOpen}
+        aria-label={`Bengaluru location: ${selectedLocation || "select a location"}`}
       >
         <span className={selectedLocation ? styles.selectedVal : styles.placeholderVal}>
           {selectedLocation || "Select Location (e.g. Whitefield)"}
@@ -71,7 +75,7 @@ export default function CustomDropdown({
         >
           <polyline points="6 9 12 15 18 9"></polyline>
         </svg>
-      </div>
+      </button>
 
       {isOpen && (
         <div className={styles.dropdownMenu}>
@@ -103,15 +107,18 @@ export default function CustomDropdown({
           <div className={styles.optionsList}>
             {filteredLocations.length > 0 ? (
               filteredLocations.map((loc) => (
-                <div
+                <button
+                  type="button"
                   key={loc}
                   className={`${styles.optionItem} ${
                     selectedLocation === loc ? styles.optionSelected : ""
                   }`}
                   onClick={() => handleSelect(loc)}
+                  role="option"
+                  aria-selected={selectedLocation === loc}
                 >
                   {loc}
-                </div>
+                </button>
               ))
             ) : (
               <div className={styles.noResults}>No locations found</div>
