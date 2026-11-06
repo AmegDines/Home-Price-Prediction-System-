@@ -1,0 +1,13 @@
+{
+  "model": "ExtraTreesRegressor",
+  "r2": 0.80048,
+  "mae": 23.696,
+  "rmse": 55.3272,
+  "trained_on": "2026-11-01T09:08:50Z",
+  "dataset_size": 12372,
+  "holdout": {
+    "test_r2": 0.8004802788947437,
+    "test_mae": 23.695997967230703,
+    "test_rmse": 55.32719833424983
+  }
+}

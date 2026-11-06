@@ -8,7 +8,9 @@ server/model/ at startup. All prediction logic runs server-side.
 import json
 import logging
 import os
+import sqlite3
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Any
@@ -19,6 +21,8 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, field_validator
+from prometheus_client import CONTENT_TYPE_LATEST, Counter, Histogram, generate_latest
+from fastapi.responses import Response
 
 # ---------------------------------------------------------------------------
 # Logging
@@ -27,12 +31,37 @@ logging.basicConfig(
     level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s"
 )
 log = logging.getLogger(__name__)
+HTTP_REQUESTS = Counter(
+    "home_price_http_requests_total",
+    "HTTP requests handled by the prediction API",
+    ["method", "path", "status_code"],
+)
+HTTP_REQUEST_DURATION = Histogram(
+    "home_price_http_request_duration_seconds",
+    "HTTP request duration in seconds",
+    ["method", "path"],
+)
+PREDICTIONS = Counter(
+    "home_price_predictions",
+    "Prediction requests processed by the model",
+    ["result"],
+)
+INFERENCE_LATENCY = Histogram(
+    "home_price_inference_latency_seconds",
+    "Time spent in the trained model prediction call",
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
 
 # ---------------------------------------------------------------------------
 # Paths
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.environ.get("MODEL_DIR", os.path.join(BASE_DIR, "model"))
+LISTINGS_TABLE = os.environ.get("LISTINGS_TABLE", "").strip()
+LISTINGS_DB_PATH = os.environ.get(
+    "LISTINGS_DB_PATH", os.path.join(BASE_DIR, "data", "listings.sqlite3")
+)
+AWS_REGION = os.environ.get("AWS_REGION", "ap-south-1")
 MODEL_PATH = os.path.join(MODEL_DIR, "home_price_model.pkl")
 ENCODER_PATH = os.path.join(MODEL_DIR, "location_encoder.pkl")
 METRICS_PATH = os.path.join(MODEL_DIR, "metrics.json")
@@ -60,6 +89,7 @@ _state: dict[str, Any] = {
 async def lifespan(app: FastAPI):
     """Load model artefacts once at startup; release on shutdown."""
     _load_artefacts()
+    _initialize_local_listing_store()
     yield
     log.info("Server shutting down.")
 
@@ -110,10 +140,14 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=[
+        origin.strip()
+        for origin in os.environ.get("CORS_ALLOW_ORIGINS", "http://localhost:3000").split(",")
+        if origin.strip()
+    ],
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type"],
 )
 
 
@@ -128,6 +162,18 @@ async def log_requests(request: Request, call_next):
     t0 = time.perf_counter()
     response = await call_next(request)
     latency_ms = (time.perf_counter() - t0) * 1000
+    route = request.url.path
+    if route not in {
+        "/api/health",
+        "/api/locations",
+        "/api/predict",
+        "/api/metrics",
+        "/api/listings",
+        "/metrics",
+    }:
+        route = "/other"
+    HTTP_REQUESTS.labels(request.method, route, str(response.status_code)).inc()
+    HTTP_REQUEST_DURATION.labels(request.method, route).observe(latency_ms / 1000)
     log.info(
         "%s %s → %d  (%.1f ms)",
         request.method,
@@ -136,6 +182,12 @@ async def log_requests(request: Request, call_next):
         latency_ms,
     )
     return response
+
+
+@app.get("/metrics", include_in_schema=False)
+def prometheus_metrics() -> Response:
+    """Expose API telemetry for the private Prometheus container network."""
+    return Response(generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
 
 # ---------------------------------------------------------------------------
@@ -194,16 +246,112 @@ class MetricsResponse(BaseModel):
     errors: int
 
 
+class ListingCreateRequest(BaseModel):
+    title: str = Field(..., min_length=1, max_length=90)
+    location: str = Field(..., min_length=1, max_length=120)
+    bhk: int = Field(..., ge=1, le=20)
+    bath: int = Field(..., ge=1, le=20)
+    total_sqft: float = Field(..., gt=0)
+    balcony: int = Field(..., ge=0, le=20)
+    asking_price_lakhs: float = Field(..., gt=0)
+    seller_name: str = Field(..., min_length=1, max_length=120)
+    seller_phone: str = Field(..., min_length=3, max_length=32)
+    imageUrl: str | None = None
+
+    @field_validator("title", "location", "seller_name", "seller_phone")
+    @classmethod
+    def trim_listing_text(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            raise ValueError("This field must not be blank")
+        return value
+
+
 # ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
+
+
+def _initialize_local_listing_store() -> None:
+    if LISTINGS_TABLE:
+        return
+    os.makedirs(os.path.dirname(LISTINGS_DB_PATH), exist_ok=True)
+    with sqlite3.connect(LISTINGS_DB_PATH) as db:
+        db.execute("CREATE TABLE IF NOT EXISTS listings (id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+
+
+def _dynamodb_table():
+    import boto3
+
+    return boto3.resource("dynamodb", region_name=AWS_REGION).Table(LISTINGS_TABLE)
+
+
+def _save_listing(listing: dict[str, Any]) -> None:
+    payload = json.dumps(listing, separators=(",", ":"))
+    if LISTINGS_TABLE:
+        _dynamodb_table().put_item(Item={"id": listing["id"], "payload": payload})
+        return
+    with sqlite3.connect(LISTINGS_DB_PATH) as db:
+        db.execute("INSERT OR REPLACE INTO listings (id, payload) VALUES (?, ?)", (listing["id"], payload))
+
+
+def _read_listings() -> list[dict[str, Any]]:
+    if LISTINGS_TABLE:
+        table = _dynamodb_table()
+        rows: list[dict[str, Any]] = []
+        response = table.scan(ProjectionExpression="#payload", ExpressionAttributeNames={"#payload": "payload"})
+        rows.extend(response.get("Items", []))
+        while response.get("LastEvaluatedKey"):
+            response = table.scan(
+                ProjectionExpression="#payload",
+                ExpressionAttributeNames={"#payload": "payload"},
+                ExclusiveStartKey=response["LastEvaluatedKey"],
+            )
+            rows.extend(response.get("Items", []))
+        return [json.loads(row["payload"]) for row in rows]
+    with sqlite3.connect(LISTINGS_DB_PATH) as db:
+        rows = db.execute("SELECT payload FROM listings ORDER BY rowid DESC").fetchall()
+    return [json.loads(row[0]) for row in rows]
+
+
+@app.get("/api/listings", tags=["Listings"])
+def list_listings() -> dict[str, list[dict[str, Any]]]:
+    try:
+        listings = _read_listings()
+    except Exception as exc:
+        log.exception("Could not read listings")
+        raise HTTPException(status_code=503, detail="Listing storage is unavailable.") from exc
+    listings.sort(key=lambda listing: listing.get("created_at", ""), reverse=True)
+    return {"listings": listings}
+
+
+@app.post("/api/listings", status_code=201, tags=["Listings"])
+def create_listing(req: ListingCreateRequest, request: Request) -> dict[str, Any]:
+    try:
+        prediction = predict(
+            PredictRequest(location=req.location, sqft=req.total_sqft, bhk=req.bhk, bath=req.bath),
+            request,
+        )
+        listing = {
+            **req.model_dump(),
+            "id": str(uuid.uuid4()),
+            "predicted_price_lakhs": prediction.predicted_price,
+            "created_at": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+        _save_listing(listing)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("Could not save listing")
+        raise HTTPException(status_code=503, detail="Listing storage is unavailable.") from exc
+    return listing
 
 
 @app.get("/api/health", response_model=HealthResponse, tags=["Monitoring"])
 def health() -> HealthResponse:
     """Return server health and model metadata.
 
-    Used as the Kubernetes readiness probe target.
+    Used by local health checks and future hosting health checks.
     """
     m = _state["metrics"]
     return HealthResponse(
@@ -240,6 +388,7 @@ def predict(req: PredictRequest, request: Request) -> PredictResponse:
 
     if model is None or encoder is None:
         _state["total_errors"] += 1
+        PREDICTIONS.labels(result="error").inc()
         raise HTTPException(status_code=503, detail="Model artefacts not loaded.")
 
     location_key = req.location.strip().lower()
@@ -247,6 +396,7 @@ def predict(req: PredictRequest, request: Request) -> PredictResponse:
     # Validate that the location is known or falls back to 'other'
     if location_key not in encoder and "other" not in encoder:
         _state["total_errors"] += 1
+        PREDICTIONS.labels(result="error").inc()
         raise HTTPException(
             status_code=422,
             detail=(
@@ -267,11 +417,13 @@ def predict(req: PredictRequest, request: Request) -> PredictResponse:
     }])
 
     try:
-        raw_pred = float(model.predict(features)[0])
+        with INFERENCE_LATENCY.time():
+            raw_pred = float(model.predict(features)[0])
     except Exception as exc:
         _state["total_errors"] += 1
+        PREDICTIONS.labels(result="error").inc()
         log.error("Model inference failed: %s", exc)
-        raise HTTPException(status_code=500, detail=f"Model inference error: {exc}")
+        raise HTTPException(status_code=500, detail="Model inference failed.") from exc
 
     # Clamp to a floor of 1 Lakh (model can't legitimately go below zero)
     predicted = max(round(raw_pred, 2), 1.0)
@@ -280,6 +432,7 @@ def predict(req: PredictRequest, request: Request) -> PredictResponse:
     latency_ms = (time.perf_counter() - t0) * 1000
     _state["total_predictions"] += 1
     _state["total_latency_ms"] += latency_ms
+    PREDICTIONS.labels(result="success").inc()
 
     log.info(
         "PREDICT | location=%s sqft=%.0f bhk=%d bath=%d → %.2f L  (%.1f ms)",

@@ -222,3 +222,38 @@ def test_metrics_endpoint(client) -> None:
     assert "total_predictions" in body
     assert "avg_response_ms" in body
     assert "errors" in body
+
+
+def test_prometheus_metrics_endpoint(client) -> None:
+    response = client.get("/metrics")
+    assert response.status_code == 200
+    assert "home_price_http_requests_total" in response.text
+
+
+def test_listing_is_predicted_and_persisted(client, tmp_path) -> None:
+    import main as server_module
+
+    server_module.LISTINGS_TABLE = ""
+    server_module.LISTINGS_DB_PATH = str(tmp_path / "listings.sqlite3")
+    server_module._initialize_local_listing_store()
+
+    response = client.post(
+        "/api/listings",
+        json={
+            "title": "Sunny Whitefield Home",
+            "location": "whitefield",
+            "bhk": 2,
+            "bath": 2,
+            "total_sqft": 1200,
+            "balcony": 1,
+            "asking_price_lakhs": 80,
+            "seller_name": "Test Seller",
+            "seller_phone": "+91 90000 00000",
+            "imageUrl": "https://example.com/home.jpg",
+        },
+    )
+    assert response.status_code == 201
+    created = response.json()
+    assert created["predicted_price_lakhs"] == 75.0
+    assert created["asking_price_lakhs"] == 80
+    assert client.get("/api/listings").json()["listings"] == [created]

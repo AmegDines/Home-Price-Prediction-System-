@@ -1,4 +1,4 @@
-import { fetchPrediction } from "./predictor";
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
 
 export interface HomeListing {
   id: string;
@@ -82,40 +82,38 @@ const INITIAL_LISTINGS: HomeListing[] = [
 
 const LOCAL_STORAGE_KEY = "bengaluru_prop_listings";
 
-/**
- * Returns all active listings, combining localStorage listings with initial mocks.
- */
-export function getStoredListings(): HomeListing[] {
-  if (typeof window === "undefined") return INITIAL_LISTINGS;
-
+function getLegacyLocalListings(): HomeListing[] {
+  if (typeof window === "undefined") return [];
   try {
     const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-    if (!raw) {
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify([]));
-      return INITIAL_LISTINGS;
-    }
-    const parsed = JSON.parse(raw) as HomeListing[];
-    return [...parsed, ...INITIAL_LISTINGS];
+    return raw ? (JSON.parse(raw) as HomeListing[]) : [];
   } catch (e) {
     console.error("Error accessing localStorage", e);
-    return INITIAL_LISTINGS;
+    return [];
   }
 }
 
+/** Fetch persisted listings and retain legacy browser entries and sample cards. */
+export async function getStoredListings(): Promise<HomeListing[]> {
+  const response = await fetch(`${API_BASE}/api/listings`, { cache: "no-store" });
+  if (!response.ok) throw new Error(`Could not load listings (HTTP ${response.status})`);
+  const data = (await response.json()) as { listings: HomeListing[] };
+  const saved = [...data.listings, ...getLegacyLocalListings()];
+  const unique = [...new Map(saved.map((listing) => [listing.id, listing])).values()];
+  return [...unique, ...INITIAL_LISTINGS];
+}
+
+export function getOfflineListings(): HomeListing[] {
+  return [...getLegacyLocalListings(), ...INITIAL_LISTINGS];
+}
+
 /**
- * Lists a new property. Runs AI valuation and saves it locally.
+ * Publishes a listing through the API, which computes the current model estimate
+ * and saves the record to DynamoDB in AWS or SQLite during local development.
  */
 export async function addStoredListing(
   listing: Omit<HomeListing, "id" | "predicted_price_lakhs" | "created_at" | "imageUrl">
 ): Promise<HomeListing> {
-  const valuation = await fetchPrediction({
-    location: listing.location,
-    sqft: listing.total_sqft,
-    bhk: listing.bhk,
-    bath: listing.bath,
-  });
-
-  // Pick a random nice house photo from Unsplash for visual premium feel
   const images = [
     "https://images.unsplash.com/photo-1580587771525-78b9dba3b914?auto=format&fit=crop&w=800&q=80",
     "https://images.unsplash.com/photo-1600585154340-be6161a56a0c?auto=format&fit=crop&w=800&q=80",
@@ -124,26 +122,16 @@ export async function addStoredListing(
   ];
   const randomImage = images[Math.floor(Math.random() * images.length)];
 
-  const newListing: HomeListing = {
-    ...listing,
-    id: `user-${Date.now()}`,
-    predicted_price_lakhs: valuation.predicted_price,
-    created_at: new Date().toISOString().replace("T", " ").split(".")[0],
-    imageUrl: randomImage,
-  };
-
-  if (typeof window !== "undefined") {
-    try {
-      const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
-      const current = raw ? (JSON.parse(raw) as HomeListing[]) : [];
-      current.unshift(newListing);
-      localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(current));
-    } catch (e) {
-      console.error("Error saving new listing", e);
-    }
+  const response = await fetch(`${API_BASE}/api/listings`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...listing, imageUrl: randomImage }),
+  });
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw { message: `Could not publish listing (HTTP ${response.status})`, detail: error?.detail };
   }
-
-  return newListing;
+  return (await response.json()) as HomeListing;
 }
 
 /**
