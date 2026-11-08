@@ -10,6 +10,13 @@ const nextConfig: NextConfig = {
     NEXT_PUBLIC_API_BASE_URL:
       process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000",
   },
+
+  /**
+   * Standalone output — required for the multi-stage Docker build.
+   * Produces a self-contained server.js with minimal node_modules.
+   * See: https://nextjs.org/docs/advanced-features/output-file-tracing
+   */
+  output: "standalone",
 };
 
 export default nextConfig;

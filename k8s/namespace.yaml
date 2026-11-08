@@ -1,0 +1,11 @@
+# =============================================================================
+# k8s/namespace.yaml
+# Dedicated namespace isolates all app resources from kube-system.
+# =============================================================================
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: home-price
+  labels:
+    app.kubernetes.io/managed-by: kubectl
+    project: home-price-prediction

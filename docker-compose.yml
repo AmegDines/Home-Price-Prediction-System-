@@ -1,54 +1,86 @@
+# =============================================================================
+# docker-compose.yml — Local development stack
+# Starts the FastAPI backend and Next.js frontend together.
+# Listings are stored in a named SQLite volume (no AWS credentials needed).
+#
+# Usage:
+#   docker compose up --build          # build images and start
+#   docker compose logs -f             # follow logs
+#   docker compose down                # stop, keep volumes
+#   docker compose down --volumes      # stop + wipe SQLite data
+# =============================================================================
+
+version: "3.9"
+
 services:
+  # ---------------------------------------------------------------------------
+  # Backend — FastAPI prediction API
+  # ---------------------------------------------------------------------------
   backend:
-    image: bengaluru-home-price-api:local
     build:
       context: ./server
       dockerfile: Dockerfile
-    init: true
-    restart: unless-stopped
-    environment:
-      LISTINGS_TABLE: ""
-      LISTINGS_DB_PATH: /app/data/listings.sqlite3
-      AWS_REGION: ap-south-1
-      CORS_ALLOW_ORIGINS: http://localhost:3000
+    image: home-price-backend:local
+    container_name: home-price-backend
     ports:
-      - "127.0.0.1:8000:8000"
+      - "8000:8000"
+    environment:
+      # SQLite mode — no LISTINGS_TABLE set means DynamoDB is not used
+      LISTINGS_DB_PATH: /app/data/listings.sqlite3
+      CORS_ALLOW_ORIGINS: "http://localhost:3000"
+      UVICORN_WORKERS: "1"
     volumes:
-      - listing-data:/app/data
-    read_only: true
-    tmpfs:
-      - /tmp
-    security_opt:
-      - no-new-privileges:true
-    cap_drop:
-      - ALL
+      - listings_data:/app/data
     healthcheck:
-      test:
-        - CMD
-        - python
-        - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health')"]
       interval: 30s
       timeout: 5s
-      start_period: 90s
       retries: 3
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - home-price-net
 
+  # ---------------------------------------------------------------------------
+  # Frontend — Next.js UI
+  # ---------------------------------------------------------------------------
   frontend:
-    image: bengaluru-home-price-web:local
     build:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        NEXT_PUBLIC_API_BASE_URL: http://localhost:8000
-    init: true
-    restart: unless-stopped
+        # Points the browser bundle at the backend
+        NEXT_PUBLIC_API_BASE_URL: "http://localhost:8000"
+    image: home-price-frontend:local
+    container_name: home-price-frontend
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
     depends_on:
       backend:
         condition: service_healthy
-    ports:
-      - "127.0.0.1:3000:3000"
-    security_opt:
-      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - home-price-net
 
+# ---------------------------------------------------------------------------
+# Named volume — persists SQLite listings across container restarts
+# ---------------------------------------------------------------------------
 volumes:
-  listing-data:
+  listings_data:
+    name: home-price-listings
+
+# ---------------------------------------------------------------------------
+# Internal bridge network — services talk by container name
+# ---------------------------------------------------------------------------
+networks:
+  home-price-net:
+    driver: bridge

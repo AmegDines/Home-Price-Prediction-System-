@@ -1,0 +1,15 @@
+# =============================================================================
+# k8s/frontend/configmap.yaml
+# Non-sensitive config for the Next.js frontend.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  namespace: home-price
+  labels:
+    app: home-price-frontend
+data:
+  # Replace YOUR_APP_SERVER_IP with the Elastic IP from terraform output
+  NEXT_PUBLIC_API_BASE_URL: "http://YOUR_APP_SERVER_IP:8000"
+  NODE_ENV: "production"

@@ -1,0 +1,63 @@
+# =============================================================================
+# k8s/ingress/ingress.yaml
+# NGINX Ingress Controller — routes external traffic to frontend and backend.
+#
+# Install NGINX Ingress for k3s first:
+#   kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.10.0/deploy/static/provider/cloud/deploy.yaml
+#
+# Routes:
+#   /       → home-price-frontend:3000
+#   /api    → home-price-backend:8000
+#   /docs   → home-price-backend:8000  (FastAPI Swagger UI)
+#   /metrics → home-price-backend:8000 (Prometheus scrape endpoint)
+# =============================================================================
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: home-price-ingress
+  namespace: home-price
+  labels:
+    app: home-price
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-body-size: "10m"
+    # CORS — allow frontend origin to call backend via ingress
+    nginx.ingress.kubernetes.io/enable-cors: "true"
+    nginx.ingress.kubernetes.io/cors-allow-methods: "GET, POST, OPTIONS"
+spec:
+  ingressClassName: nginx
+  rules:
+    - http:
+        paths:
+          # Backend API routes
+          - path: /api
+            pathType: Prefix
+            backend:
+              service:
+                name: home-price-backend
+                port:
+                  number: 8000
+          - path: /docs
+            pathType: Prefix
+            backend:
+              service:
+                name: home-price-backend
+                port:
+                  number: 8000
+          - path: /metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: home-price-backend
+                port:
+                  number: 8000
+          # Frontend — catch-all
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: home-price-frontend
+                port:
+                  number: 3000

@@ -1,1 +1,14 @@
 # ──────────────────────────────────────────────────────────────────# .gitignore — Bengaluru Home Price Prediction System# ──────────────────────────────────────────────────────────────────# ── Secrets & environment ──────────────────────────────────────────.env.env.*!.env.example*.pem*.key# ── Trained model artefacts (never commit to git) ─────────────────*.pkl*.pickleserver/model/# ── Raw CSV datasets ───────────────────────────────────────────────model_training/*.csvmodel_training/data/# ── Python bytecode & caches ───────────────────────────────────────__pycache__/*.py[cod]*.pyo.pytest_cache/.mypy_cache/.ruff_cache/*.egg-info/dist/build/.eggs/# ── Python virtual environments ────────────────────────────────────venv/.venv/env/# ── Node.js ────────────────────────────────────────────────────────node_modules/frontend/node_modules/frontend/.next/frontend/out/# ── Next.js build cache ────────────────────────────────────────────.next/# ── OS artefacts ───────────────────────────────────────────────────.DS_StoreThumbs.dbdesktop.ini# ── IDE ────────────────────────────────────────────────────────────.idea/.vscode/*.code-workspace# ── Test / coverage reports ────────────────────────────────────────htmlcov/.coveragecoverage.xmlreports/# ── Jupyter ────────────────────────────────────────────────────────.ipynb_checkpoints/# ── Local infrastructure state and generated credentials ───────────.terraform/*.tfstate*.tfstate.**.tfplancrash.logcrash.*.log*.auto.tfvars!*.auto.tfvars.example*.tfvars!*.tfvars.example# Model/data files remain local or in private S3; never push them to GitHub.model_training/*.pklmodel_training/*.csvserver/model/**server/data/*.sqlite3
+deploy-k8s.sh
+package-lock.json
+/*.terraform
+\terraform\.terraform\terraform.tfstate
+\terraform\.terraform
+bootstrap.sh
+.pytest_cache
+.venv
+terraform\terraform.lock.hcl
+\terraform\.terraform\*
+terraform/.terraform.lock.hcl
+terraform/.terraform/
+terraform/terraform-iam-policy.json

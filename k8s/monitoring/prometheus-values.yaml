@@ -1,0 +1,120 @@
+# =============================================================================
+# k8s/monitoring/prometheus-values.yaml
+# Helm values for kube-prometheus-stack.
+# Installs: Prometheus + Grafana + Alertmanager + node-exporter + kube-state-metrics
+#
+# Install command (run on the app server after k3s is ready):
+#   helm repo add prometheus-community https://prometheus-community.github.io/helm-charts
+#   helm repo update
+#   helm install kube-prom prometheus-community/kube-prometheus-stack \
+#     --namespace monitoring --create-namespace \
+#     -f k8s/monitoring/prometheus-values.yaml
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Prometheus configuration
+# ---------------------------------------------------------------------------
+prometheus:
+  prometheusSpec:
+    # Scrape interval — collect metrics every 15 seconds
+    scrapeInterval: 15s
+    evaluationInterval: 15s
+
+    # Persist data to a PVC so metrics survive pod restarts
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          storageClassName: local-path   # k3s default storage class
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+
+    # Allow Prometheus to discover ServiceMonitors in all namespaces
+    serviceMonitorSelectorNilUsesHelmValues: false
+    serviceMonitorNamespaceSelector: {}
+    serviceMonitorSelector: {}
+
+    resources:
+      requests:
+        cpu: 100m
+        memory: 256Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+  service:
+    type: NodePort
+    nodePort: 30090   # accessible at http://<EC2-IP>:30090
+
+# ---------------------------------------------------------------------------
+# Grafana configuration
+# ---------------------------------------------------------------------------
+grafana:
+  adminPassword: "HomePriceGrafana2024!"   # change before production use
+
+  service:
+    type: NodePort
+    nodePort: 30100   # accessible at http://<EC2-IP>:30100
+
+  # Pre-load the home-price dashboard from ConfigMap
+  sidecar:
+    dashboards:
+      enabled: true
+      searchNamespace: "monitoring"
+
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+  # Grafana ini settings
+  grafana.ini:
+    server:
+      root_url: "%(protocol)s://%(domain)s:%(http_port)s/"
+    auth.anonymous:
+      enabled: false
+
+# ---------------------------------------------------------------------------
+# Alertmanager
+# ---------------------------------------------------------------------------
+alertmanager:
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 20m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+  service:
+    type: NodePort
+    nodePort: 30903
+
+# ---------------------------------------------------------------------------
+# Node exporter — collects host-level metrics (CPU, memory, disk)
+# ---------------------------------------------------------------------------
+nodeExporter:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# kube-state-metrics — Kubernetes object metrics (pod status, restarts, etc.)
+# ---------------------------------------------------------------------------
+kubeStateMetrics:
+  enabled: true
+
+# ---------------------------------------------------------------------------
+# Reduce resource footprint for t3.small single-node cluster
+# ---------------------------------------------------------------------------
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeEtcd:
+  enabled: false
+kubeProxy:
+  enabled: false

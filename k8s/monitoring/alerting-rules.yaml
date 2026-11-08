@@ -1,0 +1,106 @@
+# =============================================================================
+# k8s/monitoring/alerting-rules.yaml
+# PrometheusRule — custom alerting rules for the home-price application.
+# (Unit V — Monitoring, Observability, and Security)
+# =============================================================================
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: home-price-alerts
+  namespace: monitoring
+  labels:
+    release: kube-prom
+spec:
+  groups:
+    # -------------------------------------------------------------------------
+    # Application-level alerts
+    # -------------------------------------------------------------------------
+    - name: home-price-app
+      interval: 30s
+      rules:
+        # Alert when prediction error rate exceeds 5% over 5 minutes
+        - alert: PredictionErrorRateHigh
+          expr: |
+            rate(home_price_predictions{result="error"}[5m])
+            / rate(home_price_predictions[5m]) > 0.05
+          for: 2m
+          labels:
+            severity: warning
+            team: ml-ops
+          annotations:
+            summary: "High prediction error rate"
+            description: "More than 5% of predictions are failing. Check model artifacts and logs."
+
+        # Alert when p99 inference latency exceeds 500ms
+        - alert: HighInferenceLatency
+          expr: |
+            histogram_quantile(0.99,
+              rate(home_price_inference_latency_seconds_bucket[5m])
+            ) > 0.5
+          for: 3m
+          labels:
+            severity: warning
+            team: ml-ops
+          annotations:
+            summary: "High ML inference latency"
+            description: "p99 inference latency is above 500ms. The model may be overloaded."
+
+        # Alert when API request rate drops to zero (possible outage)
+        - alert: APIRequestRateZero
+          expr: |
+            rate(home_price_http_requests_total[5m]) == 0
+          for: 5m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "API is receiving no traffic"
+            description: "No HTTP requests in the last 5 minutes. The service may be down."
+
+        # Alert when HTTP 5xx error rate exceeds 2%
+        - alert: HighHTTP5xxRate
+          expr: |
+            rate(home_price_http_requests_total{status_code=~"5.."}[5m])
+            / rate(home_price_http_requests_total[5m]) > 0.02
+          for: 2m
+          labels:
+            severity: warning
+            team: platform
+          annotations:
+            summary: "High HTTP 5xx error rate"
+            description: "More than 2% of requests are returning 5xx errors."
+
+    # -------------------------------------------------------------------------
+    # Kubernetes pod-level alerts
+    # -------------------------------------------------------------------------
+    - name: home-price-k8s
+      rules:
+        # Alert when a pod is in CrashLoopBackOff
+        - alert: PodCrashLoopBackOff
+          expr: |
+            kube_pod_container_status_waiting_reason{
+              namespace="home-price",
+              reason="CrashLoopBackOff"
+            } == 1
+          for: 1m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Pod is in CrashLoopBackOff"
+            description: "Pod {{ $labels.pod }} in namespace home-price is crash looping."
+
+        # Alert when available replicas fall below the minimum
+        - alert: BackendReplicasLow
+          expr: |
+            kube_deployment_status_replicas_available{
+              namespace="home-price",
+              deployment="home-price-backend"
+            } < 1
+          for: 2m
+          labels:
+            severity: critical
+            team: platform
+          annotations:
+            summary: "Backend has no available replicas"
+            description: "home-price-backend has fewer than 1 available replica."
