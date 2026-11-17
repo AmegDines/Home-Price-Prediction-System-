@@ -6,11 +6,23 @@ echo "  🚀 Bengaluru Home Price Prediction - Full K8s Deploy"
 echo "====================================================="
 
 REGION="${AWS_REGION:-ap-south-1}"
-ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "${AWS_ACCOUNT_ID:-}")
+export AWS_DEFAULT_REGION="${REGION}"
+export AWS_REGION="${REGION}"
 
-if [ -z "${ACCOUNT_ID}" ]; then
-  echo "❌ Error: Could not determine AWS Account ID. Please run 'aws configure' first."
-  exit 1
+# 1. Try STS with explicit region
+ACCOUNT_ID=$(aws sts get-caller-identity --region "${REGION}" --query Account --output text 2>/dev/null || true)
+
+# 2. Try EC2 Metadata Service (IMDSv2)
+if [ -z "${ACCOUNT_ID}" ] || [ "${ACCOUNT_ID}" == "None" ]; then
+  IMDS_TOKEN=$(curl -s -X PUT "http://169.254.169.254/latest/api/token" -H "X-aws-ec2-metadata-token-ttl-seconds: 60" 2>/dev/null || true)
+  if [ -n "${IMDS_TOKEN}" ]; then
+    ACCOUNT_ID=$(curl -s -H "X-aws-ec2-metadata-token: $IMDS_TOKEN" http://169.254.169.254/latest/dynamic/instance-identity/document 2>/dev/null | grep -Po '"accountId"\s*:\s*"\K[^"]+' || true)
+  fi
+fi
+
+# 3. Fallback to AWS_ACCOUNT_ID env var or default account ID
+if [ -z "${ACCOUNT_ID}" ] || [ "${ACCOUNT_ID}" == "None" ]; then
+  ACCOUNT_ID="${AWS_ACCOUNT_ID:-111169963700}"
 fi
 
 REGISTRY="${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com"
@@ -18,8 +30,8 @@ NAMESPACE="home-price"
 REPLICAS="${REPLICAS:-1}"
 
 # Look up Model S3 bucket
-MODEL_BUCKET=$(aws s3api list-buckets --query "Buckets[?starts_with(Name, 'home-price-models-')].Name" --output text 2>/dev/null | awk '{print $1}')
-if [ -z "${MODEL_BUCKET}" ]; then
+MODEL_BUCKET=$(aws s3api list-buckets --region "${REGION}" --query "Buckets[?starts_with(Name, 'home-price-models-')].Name" --output text 2>/dev/null | awk '{print $1}' || true)
+if [ -z "${MODEL_BUCKET}" ] || [ "${MODEL_BUCKET}" == "None" ]; then
   MODEL_BUCKET="home-price-models-${ACCOUNT_ID}"
 fi
 echo "Using AWS Account: ${ACCOUNT_ID} in ${REGION}"
