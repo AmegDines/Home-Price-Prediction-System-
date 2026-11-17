@@ -178,14 +178,13 @@ locals {
     export DEBIAN_FRONTEND=noninteractive
 
     # --- Allocate 4 GB Swap space (Recommended for smooth k3s & burst workloads) ---
-    if ! swapon --show | grep -q "/swapfile"; then
+    if [ ! -f /swapfile ]; then
       fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
       chmod 600 /swapfile
       mkswap /swapfile
       swapon /swapfile
       echo '/swapfile none swap sw 0 0' >> /etc/fstab
     fi
-    sysctl vm.swappiness=20
 
     # --- System update ---
     apt-get update -y
