@@ -56,8 +56,8 @@ Write-Host "Frontend will point to Backend API: $BackendUrl" -ForegroundColor Ye
 
 # 3. ECR Login
 Write-Host "`n[1/4] Authenticating Docker with ECR..." -ForegroundColor Yellow
-$loginPwd = (aws ecr get-login-password --region $Region).Trim()
-$loginPwd | docker login --username AWS --password-stdin $Registry
+$token = (aws ecr get-login-password --region $Region).Trim()
+docker login -u AWS -p $token $Registry
 if ($LASTEXITCODE -ne 0) {
     Write-Error "Failed to authenticate Docker with AWS ECR."
     exit 1
