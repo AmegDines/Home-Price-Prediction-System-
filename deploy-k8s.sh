@@ -9,6 +9,14 @@ REGION="${AWS_REGION:-ap-south-1}"
 export AWS_DEFAULT_REGION="${REGION}"
 export AWS_REGION="${REGION}"
 
+# Ensure kubeconfig permissions for k3s
+if [ -f /etc/rancher/k3s/k3s.yaml ]; then
+  sudo chmod 644 /etc/rancher/k3s/k3s.yaml 2>/dev/null || true
+  export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+elif [ -f "$HOME/.kube/config" ]; then
+  export KUBECONFIG="$HOME/.kube/config"
+fi
+
 # 1. Try STS with explicit region
 ACCOUNT_ID=$(aws sts get-caller-identity --region "${REGION}" --query Account --output text 2>/dev/null || true)
 
