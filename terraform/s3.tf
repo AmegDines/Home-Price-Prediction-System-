@@ -1,16 +1,44 @@
 # =============================================================================
 # terraform/s3.tf
-# S3 bucket for Terraform remote state — already created via AWS CLI.
-#
-# The bucket "home-price-tfstate-bucket" was created before terraform init
-# using the AWS CLI. This file uses a data source to reference it without
-# attempting to re-create it.
-#
-# NOTE: The DynamoDB lock table is NOT needed because we use
-#       use_lockfile = true in main.tf (Terraform >= 1.10 native locking).
+# S3 buckets:
+#   1. Remote state bucket (referenced via data source)
+#   2. Model artefacts bucket (stores .pkl and encoder for FastAPI inference)
 # =============================================================================
 
-# Reference the existing state bucket (created via AWS CLI before terraform init)
+data "aws_caller_identity" "current" {}
+
+# Reference the existing state bucket (created before terraform init)
 data "aws_s3_bucket" "tfstate" {
   bucket = var.tfstate_bucket
+}
+
+# ---------------------------------------------------------------------------
+# S3 Bucket for ML Model Artefacts (home_price_model.pkl, location_encoder.pkl)
+# ---------------------------------------------------------------------------
+resource "aws_s3_bucket" "model_bucket" {
+  bucket        = var.model_bucket_name != "" ? var.model_bucket_name : "${var.app_name}-models-${data.aws_caller_identity.current.account_id}"
+  force_destroy = true
+
+  tags = {
+    Name        = "${var.app_name}-model-artefacts"
+    Environment = var.environment
+  }
+}
+
+resource "aws_s3_bucket_versioning" "model_bucket" {
+  bucket = aws_s3_bucket.model_bucket.id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
+resource "aws_s3_bucket_server_side_encryption_configuration" "model_bucket" {
+  bucket = aws_s3_bucket.model_bucket.id
+
+  rule {
+    apply_server_side_encryption_by_default {
+      sse_algorithm = "AES256"
+    }
+  }
 }

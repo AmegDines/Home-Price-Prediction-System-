@@ -67,3 +67,13 @@ output "s3_tfstate_bucket" {
   description = "S3 bucket storing Terraform state."
   value       = var.tfstate_bucket
 }
+
+output "model_s3_bucket" {
+  description = "S3 bucket name where model artefacts should be uploaded."
+  value       = aws_s3_bucket.model_bucket.bucket
+}
+
+output "model_s3_bucket_arn" {
+  description = "ARN of the S3 bucket for model artefacts."
+  value       = aws_s3_bucket.model_bucket.arn
+}

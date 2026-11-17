@@ -177,6 +177,16 @@ locals {
     set -euxo pipefail
     export DEBIAN_FRONTEND=noninteractive
 
+    # --- Allocate 4 GB Swap space (Vital for t3.micro AWS Free Tier) ---
+    if ! swapon --show | grep -q "/swapfile"; then
+      fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
+      chmod 600 /swapfile
+      mkswap /swapfile
+      swapon /swapfile
+      echo '/swapfile none swap sw 0 0' >> /etc/fstab
+    fi
+    sysctl vm.swappiness=20
+
     # --- System update ---
     apt-get update -y
     apt-get upgrade -y

@@ -24,7 +24,7 @@ pipeline {
 
     environment {
         AWS_REGION          = 'ap-south-1'
-        ECR_REGION          = 'us-east-1'          // ECR Public API region
+        ECR_REGION          = 'ap-south-1'          // ECR Public API region
         APP_NAME            = 'home-price'
         BACKEND_IMAGE_NAME  = 'home-price-backend'
         FRONTEND_IMAGE_NAME = 'home-price-frontend'

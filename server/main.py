@@ -57,6 +57,8 @@ INFERENCE_LATENCY = Histogram(
 # ---------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_DIR = os.environ.get("MODEL_DIR", os.path.join(BASE_DIR, "model"))
+MODEL_S3_BUCKET = os.environ.get("MODEL_S3_BUCKET", "").strip()
+MODEL_S3_PREFIX = os.environ.get("MODEL_S3_PREFIX", "").strip()
 LISTINGS_TABLE = os.environ.get("LISTINGS_TABLE", "").strip()
 LISTINGS_DB_PATH = os.environ.get(
     "LISTINGS_DB_PATH", os.path.join(BASE_DIR, "data", "listings.sqlite3")
@@ -94,20 +96,51 @@ async def lifespan(app: FastAPI):
     log.info("Server shutting down.")
 
 
+def _download_artefacts_from_s3() -> None:
+    """Download model artefacts from S3 into MODEL_DIR if MODEL_S3_BUCKET is configured."""
+    if not MODEL_S3_BUCKET:
+        return
+
+    import boto3
+    from botocore.exceptions import ClientError
+
+    os.makedirs(MODEL_DIR, exist_ok=True)
+    s3 = boto3.client("s3", region_name=AWS_REGION)
+    files = ["home_price_model.pkl", "location_encoder.pkl", "metrics.json"]
+
+    log.info("Downloading model artefacts from s3://%s ...", MODEL_S3_BUCKET)
+    for filename in files:
+        target_path = os.path.join(MODEL_DIR, filename)
+        s3_key = f"{MODEL_S3_PREFIX.rstrip('/')}/{filename}" if MODEL_S3_PREFIX else filename
+        try:
+            log.info("Downloading %s to %s ...", s3_key, target_path)
+            s3.download_file(MODEL_S3_BUCKET, s3_key, target_path)
+            log.info("Successfully downloaded %s from S3", filename)
+        except ClientError as e:
+            if filename == "metrics.json":
+                log.warning("metrics.json not found in S3 bucket %s (optional)", MODEL_S3_BUCKET)
+            else:
+                log.error("Failed to download %s from S3: %s", filename, e)
+                raise
+
+
 def _load_artefacts() -> None:
     """Deserialise model and encoder from server/model/.
 
     Raises RuntimeError if either file is missing.
     """
+    if MODEL_S3_BUCKET:
+        _download_artefacts_from_s3()
+
     if not os.path.exists(MODEL_PATH):
         raise RuntimeError(
             f"Model not found at {MODEL_PATH}. "
-            "Run model_training/train.py first."
+            "Run model_training/train.py or upload artefacts to S3 first."
         )
     if not os.path.exists(ENCODER_PATH):
         raise RuntimeError(
             f"Encoder not found at {ENCODER_PATH}. "
-            "Run model_training/train.py first."
+            "Run model_training/train.py or upload artefacts to S3 first."
         )
 
     _state["model"] = joblib.load(MODEL_PATH)

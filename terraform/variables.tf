@@ -23,7 +23,7 @@ variable "app_name" {
 
 # ---------------------------------------------------------------------------
 # EC2 — application server (k3s + app pods)
-# t3.small stays within free-tier 750 hrs/month
+# t3.micro stays within AWS Free Tier 750 hrs/month (1 vCPU, 1 GB RAM + swap)
 # ---------------------------------------------------------------------------
 variable "enable_separate_jenkins" {
   description = "Whether to provision a separate EC2 instance for Jenkins. Set to false to run Jenkins on the app server (saves AWS Free Tier hours)."
@@ -32,15 +32,15 @@ variable "enable_separate_jenkins" {
 }
 
 variable "app_instance_type" {
-  description = "EC2 instance type for the k3s application server."
+  description = "EC2 instance type for the k3s application server (t3.micro for Free Tier)."
   type        = string
-  default     = "t3.small"
+  default     = "t3.micro"
 }
 
 variable "jenkins_instance_type" {
   description = "EC2 instance type for the Jenkins CI/CD server."
   type        = string
-  default     = "t3.small"
+  default     = "t3.micro"
 }
 
 variable "ami_id" {
@@ -58,7 +58,13 @@ variable "key_pair_name" {
 variable "enable_dynamodb" {
   description = "Enable DynamoDB table and IAM instance profile. Requires IAM/DynamoDB write permissions on AWS account."
   type        = bool
-  default     = false
+  default     = true
+}
+
+variable "model_bucket_name" {
+  description = "Explicit S3 bucket name for ML model artefacts. Leave blank to auto-generate unique name."
+  type        = string
+  default     = ""
 }
 
 # ---------------------------------------------------------------------------

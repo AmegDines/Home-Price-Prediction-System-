@@ -77,6 +77,22 @@ data "aws_iam_policy_document" "app_dynamodb" {
 
     resources = ["arn:aws:logs:${var.aws_region}:*:*"]
   }
+
+  # Allow downloading model artefacts from S3
+  statement {
+    sid    = "AllowS3ModelDownload"
+    effect = "Allow"
+
+    actions = [
+      "s3:GetObject",
+      "s3:ListBucket",
+    ]
+
+    resources = [
+      aws_s3_bucket.model_bucket.arn,
+      "${aws_s3_bucket.model_bucket.arn}/*",
+    ]
+  }
 }
 
 resource "aws_iam_policy" "app_dynamodb" {
