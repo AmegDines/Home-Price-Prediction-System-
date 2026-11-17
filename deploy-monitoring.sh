@@ -4,6 +4,14 @@
 # =============================================================================
 set -euo pipefail
 
+# Ensure kubeconfig permissions for k3s
+if [ -f /etc/rancher/k3s/k3s.yaml ]; then
+  sudo chmod 644 /etc/rancher/k3s/k3s.yaml 2>/dev/null || true
+  export KUBECONFIG="${KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
+elif [ -f "$HOME/.kube/config" ]; then
+  export KUBECONFIG="$HOME/.kube/config"
+fi
+
 echo "====================================================="
 echo "  📊 Deploying Prometheus & Grafana Monitoring Stack"
 echo "====================================================="
