@@ -23,7 +23,7 @@ variable "app_name" {
 
 # ---------------------------------------------------------------------------
 # EC2 — application server (k3s + app pods)
-# t3.micro stays within AWS Free Tier 750 hrs/month (1 vCPU, 1 GB RAM + swap)
+# t3.small provides 2 vCPUs and 2 GB RAM for smooth k8s + app + monitoring
 # ---------------------------------------------------------------------------
 variable "enable_separate_jenkins" {
   description = "Whether to provision a separate EC2 instance for Jenkins. Set to false to run Jenkins on the app server (saves AWS Free Tier hours)."
@@ -32,15 +32,15 @@ variable "enable_separate_jenkins" {
 }
 
 variable "app_instance_type" {
-  description = "EC2 instance type for the k3s application server (t3.micro for Free Tier)."
+  description = "EC2 instance type for the k3s application server (t3.small for balanced k8s & monitoring performance)."
   type        = string
-  default     = "t3.micro"
+  default     = "t3.small"
 }
 
 variable "jenkins_instance_type" {
   description = "EC2 instance type for the Jenkins CI/CD server."
   type        = string
-  default     = "t3.micro"
+  default     = "t3.small"
 }
 
 variable "ami_id" {

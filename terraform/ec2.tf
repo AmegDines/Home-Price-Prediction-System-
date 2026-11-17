@@ -177,7 +177,7 @@ locals {
     set -euxo pipefail
     export DEBIAN_FRONTEND=noninteractive
 
-    # --- Allocate 4 GB Swap space (Vital for t3.micro AWS Free Tier) ---
+    # --- Allocate 4 GB Swap space (Recommended for smooth k3s & burst workloads) ---
     if ! swapon --show | grep -q "/swapfile"; then
       fallocate -l 4G /swapfile || dd if=/dev/zero of=/swapfile bs=1M count=4096
       chmod 600 /swapfile
