@@ -6,8 +6,17 @@
  * There are NO embedded model coefficients or fallback maths here.
  */
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+export function getApiBase(): string {
+  if (typeof window !== "undefined") {
+    const host = window.location.hostname;
+    if (host && host !== "localhost" && host !== "127.0.0.1") {
+      return `http://${host}:30800`;
+    }
+  }
+  return process.env.NEXT_PUBLIC_API_BASE_URL || "http://localhost:8000";
+}
+
+const API_BASE = getApiBase();
 
 // ---------------------------------------------------------------------------
 // Types
@@ -49,7 +58,7 @@ export interface ApiError {
 export async function fetchPrediction(
   req: PredictRequest
 ): Promise<PredictionResult> {
-  const res = await fetch(`${API_BASE}/api/predict`, {
+  const res = await fetch(`${getApiBase()}/api/predict`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -76,7 +85,7 @@ export async function fetchPrediction(
  * that the model was trained on.
  */
 export async function fetchLocations(): Promise<string[]> {
-  const res = await fetch(`${API_BASE}/api/locations`);
+  const res = await fetch(`${getApiBase()}/api/locations`);
   if (!res.ok) {
     throw {
       message: `Failed to load locations (HTTP ${res.status})`,
@@ -90,7 +99,7 @@ export async function fetchLocations(): Promise<string[]> {
  * Call GET /api/health to retrieve model metadata shown in the UI footer.
  */
 export async function fetchHealth(): Promise<HealthData> {
-  const res = await fetch(`${API_BASE}/api/health`);
+  const res = await fetch(`${getApiBase()}/api/health`);
   if (!res.ok) {
     throw {
       message: `Failed to fetch health data (HTTP ${res.status})`,

@@ -1,4 +1,4 @@
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000";
+import { getApiBase } from "./predictor";
 
 export interface HomeListing {
   id: string;
@@ -95,7 +95,7 @@ function getLegacyLocalListings(): HomeListing[] {
 
 /** Fetch persisted listings and retain legacy browser entries and sample cards. */
 export async function getStoredListings(): Promise<HomeListing[]> {
-  const response = await fetch(`${API_BASE}/api/listings`, { cache: "no-store" });
+  const response = await fetch(`${getApiBase()}/api/listings`, { cache: "no-store" });
   if (!response.ok) throw new Error(`Could not load listings (HTTP ${response.status})`);
   const data = (await response.json()) as { listings: HomeListing[] };
   const saved = [...data.listings, ...getLegacyLocalListings()];
@@ -122,7 +122,7 @@ export async function addStoredListing(
   ];
   const randomImage = images[Math.floor(Math.random() * images.length)];
 
-  const response = await fetch(`${API_BASE}/api/listings`, {
+  const response = await fetch(`${getApiBase()}/api/listings`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...listing, imageUrl: randomImage }),

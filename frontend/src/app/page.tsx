@@ -6,6 +6,7 @@ import {
   fetchHealth,
   fetchLocations,
   fetchPrediction,
+  getApiBase,
   type ApiError,
   type HealthData,
   type PredictionResult,
